@@ -9,6 +9,7 @@ mkdir -p "${TMPDIR:-/tmp}/swift-module-cache"
 swiftc -parse-as-library \
     -module-cache-path "${TMPDIR:-/tmp}/swift-module-cache" \
     "$repo_root/src/AwakeStatus.swift" \
+    "$repo_root/src/AwakeAppRecommendations.swift" \
     "$repo_root/tests/swift/AwakeStatusTests.swift" \
     -o "$test_binary"
 "$test_binary"

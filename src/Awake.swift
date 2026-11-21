@@ -12,6 +12,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusObservation: AnyCancellable?
     private var errorObservation: AnyCancellable?
 
+    // Window Controllers for Get Started & Settings
+    private var settingsWindow: NSWindow?
+    private var getStartedWindow: NSWindow?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
         configureStatusItem()
@@ -25,6 +29,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             self?.model.refresh()
+        }
+
+        // First launch Get Started onboarding
+        if !UserDefaults.standard.bool(forKey: "hasCompletedGetStarted") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.showGetStartedWindow(force: false)
+            }
         }
     }
 
@@ -47,10 +58,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
-        popover.contentSize = NSSize(width: 360, height: 470)
+        popover.contentSize = NSSize(width: 360, height: 490)
         popover.contentViewController = NSHostingController(
             rootView: AwakePopoverView(
                 model: model,
+                onOpenSettings: { [weak self] in
+                    self?.popover.performClose(nil)
+                    self?.showSettingsWindow()
+                },
                 onAddApp: { [weak self] in self?.addAppRule() },
                 onAddProcess: { [weak self] in self?.addProcessRule() },
                 onAddSchedule: { [weak self] in self?.addScheduleRule() },
@@ -77,6 +92,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Windows Management
+    func showSettingsWindow() {
+        if let window = settingsWindow {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let settingsView = AwakeSettingsView(
+            model: model,
+            onRerunGetStarted: { [weak self] in
+                self?.settingsWindow?.close()
+                self?.showGetStartedWindow(force: true)
+            },
+            onAddApp: { [weak self] in self?.addAppRule() },
+            onAddProcess: { [weak self] in self?.addProcessRule() },
+            onAddSchedule: { [weak self] in self?.addScheduleRule() }
+        )
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 480),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.center()
+        window.title = "Awake Settings"
+        window.contentView = NSHostingView(rootView: settingsView)
+        window.isReleasedWhenClosed = false
+        settingsWindow = window
+
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func showGetStartedWindow(force: Bool = false) {
+        if !force && UserDefaults.standard.bool(forKey: "hasCompletedGetStarted") {
+            return
+        }
+
+        if let window = getStartedWindow {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let getStartedView = AwakeGetStartedView(
+            model: model,
+            onFinish: { [weak self] in
+                self?.getStartedWindow?.close()
+                self?.getStartedWindow = nil
+                self?.model.refresh()
+            }
+        )
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 540, height: 500),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.center()
+        window.title = "Get Started with Awake"
+        window.contentView = NSHostingView(rootView: getStartedView)
+        window.isReleasedWhenClosed = false
+        getStartedWindow = window
+
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - Rules Actions
     private func addAppRule() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.application]

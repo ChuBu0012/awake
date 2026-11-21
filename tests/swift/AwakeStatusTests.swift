@@ -19,6 +19,17 @@ struct AwakeStatusTests {
         expect(StatusUpdatePolicy.durationSelection(forRemainingSeconds: 1_799) == 1_800, "a newly started 30-minute request must keep the 30-minute selection")
         expect(StatusUpdatePolicy.durationSelection(forRemainingSeconds: 125) == 125, "custom durations must keep their remaining duration")
         expect(StatusUpdatePolicy.durationSelection(forRemainingSeconds: 0) == 0, "expired durations must become indefinite")
+
+        // Recommendations discovery checks
+        let recommendations = AppRecommendationEngine.discoverRecommendations()
+        for rec in recommendations {
+            expect(!rec.name.isEmpty, "recommended app name must not be empty")
+            expect(!rec.bundleID.isEmpty, "recommended bundleID must not be empty")
+            expect(!rec.reason.isEmpty, "recommended reason must not be empty")
+        }
+        expect(!RecommendedAppItem.WatchMode.workProcess.description.isEmpty, "work process mode description must not be empty")
+        expect(!RecommendedAppItem.WatchMode.appOpen.description.isEmpty, "app open mode description must not be empty")
+
         print("AwakeStatusTests: all checks passed")
     }
 

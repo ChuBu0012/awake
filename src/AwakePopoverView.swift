@@ -3,6 +3,7 @@ import SwiftUI
 
 struct AwakePopoverView: View {
     @ObservedObject var model: AwakePopoverModel
+    let onOpenSettings: () -> Void
     let onAddApp: () -> Void
     let onAddProcess: () -> Void
     let onAddSchedule: () -> Void
@@ -145,12 +146,22 @@ struct AwakePopoverView: View {
 
             Divider()
 
-            Button(action: { NSApplication.shared.terminate(nil) }) {
-                Label("Quit Awake", systemImage: "xmark.circle")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                Button(action: onOpenSettings) {
+                    Label("Settings…", systemImage: "gearshape")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open Settings")
+
+                Spacer()
+
+                Button(action: { NSApplication.shared.terminate(nil) }) {
+                    Label("Quit Awake", systemImage: "xmark.circle")
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("q", modifiers: .command)
+                .accessibilityLabel("Quit Awake")
             }
-            .buttonStyle(.plain)
-            .keyboardShortcut("q", modifiers: .command)
         }
         .padding(16)
         .frame(width: 360)
@@ -182,11 +193,19 @@ struct AwakePopoverView: View {
                     .animation(motion, value: statusDetail)
             }
             Spacer(minLength: 0)
+
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape")
+                    .foregroundColor(.secondary)
+                    .padding(4)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Settings")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
         .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
