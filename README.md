@@ -14,36 +14,24 @@ Awake is developed in the open under the [MIT License](LICENSE). Contributions a
 
 ## ✨ Features (จุดเด่น)
 
-1. **มาสคอต Stickman น่ารัก ตลก และมีเอกลักษณ์**:
-   - หน้าคนทำงานหนัก ตาโตเบิกกว้าง ขอบตาคล้ำแบบคนอดนอนรัน Agent ข้ามคืน
-   - AppIcon ขาว-ดำ ลายเส้นหมึกคมชัดบนพื้นหลัง Squircle ขาวนวล
-   - ไอคอนบนแถบ Menu Bar เปลี่ยนตามสถานะ: หน้าตาค้าง `( O_O )` เมื่อ Active และหลับตาพริ้ม `( -_- ) z` เมื่อ Inactive
-2. **Clamshell / Lid-Closed Support**: ป้องกันเครื่องหลับเมื่อพับจอด้วย `sudo pmset -a disablesleep 1` + ป้องกัน kernel idle ด้วย `caffeinate`
-3. **Menu Bar App กระชับ รวดเร็ว (`Awake.app`)**:
-   - พัฒนาด้วย Swift (AppKit) แท้ๆ เบาเพียง 115 KB
-   - เมนูคลีน เรียบง่าย ไม่มีเมนูรกตา:
-     - ดูสถานะและเวลานับถอยหลัง
-     - ปุ่ม Toggle Awake เปิด/ปิดทันที
-     - ตัวเลือกตั้งเวลาล่วงหน้า (Duration Presets: Indefinite, 30m, 1h, 2h, 4h, 8h)
-     - สลับเปิด/ปิด Battery Guard
-4. **Battery & Thermal Guard**:
-   - ตัดการทำงานอัตโนมัติหากแบตเตอรี่เหลือน้อยกว่า 20% ขณะใช้งานบนแบตเตอรี่ (ป้องกันเครื่องร้อนหรือแบตหมดในกระเป๋าเป้)
-5. **One-Time Passwordless Sudo**:
-   - ตั้งค่าสิทธิ์ผ่าน `sudoers` เพียงครั้งเดียว ปลอดภัยเฉพาะคำสั่ง `pmset -a disablesleep` ทำให้คลิกใน Menu Bar หรือพิมพ์ใน CLI ได้ทันทีโดยไม่ต้องเด้งถามรหัสผ่าน
+1. **Local automation**: enable rules for selected apps, exact work process names, and weekly schedules. Rules run on this Mac while the menu bar app is open.
+2. **One arbitration engine**: CLI and menu bar app share a private, locked state file; Manual On, Activity, Schedule, Snooze, Battery Guard, and `awake run` follow the same rules.
+3. **Scoped sleep prevention**: idle prevention uses per-request `caffeinate`; optional lid-closed support uses the narrowly scoped `pmset` sudoers rules and restores the value Awake captured.
+4. **Menu bar controls**: choose a duration, add/pause/remove automation rules, see active requests, and toggle Battery Guard.
 
 ---
 
 ## 🚀 Quick Start (เริ่มต้นใช้งาน)
 
-**Requirements:** macOS 12 or later, Xcode Command Line Tools (for building), and administrator access for the one-time `pmset` setup. The app changes a system-wide sleep setting; use it only while needed and turn it off afterward to restore the prior setting.
+**Requirements:** macOS 12 or later. Building from source requires Go 1.26 and Xcode Command Line Tools. Administrator access is only needed for optional lid-closed support. Idle-sleep prevention uses a per-request `caffeinate` assertion; the optional lid layer changes the system-wide `pmset` setting and restores the captured prior value.
 
 ### 1. Build และ Install
 ```bash
 make install
 ```
 
-### 2. ตั้งค่าสิทธิ์ครั้งแรก (One-time Setup)
-เพื่อให้คลิกเปิด/ปิดใน Menu Bar และ Terminal ได้โดยไม่ต้องกรอกรหัสผ่านทุกครั้ง:
+### 2. เปิดใช้ Lid-Closed Support (ตัวเลือก)
+การป้องกันการหลับตามปกติไม่ต้องใช้ `sudo` การตั้งค่านี้เพิ่มกฎ sudoers แบบจำกัดเพื่อรองรับการพับจอ:
 ```bash
 make setup
 ```
@@ -60,18 +48,29 @@ open ~/Applications/Awake.app
 
 | คำสั่ง | คำอธิบาย |
 |---|---|
-| `awake on [duration]` | เปิดโหมดห้ามหลับ (เช่น `awake on 30m`, `awake on 2h`, `awake on indefinite`) |
-| `awake off` | ปิดโหมด คืนค่า sleep ปกติ |
-| `awake status` | ดูสถานะปัจจุบัน เวลาที่เหลือ แหล่งพลังงาน และแบตเตอรี่ |
-| `awake run <command...>` | รันคำสั่งพร้อมเปิด awake อัตโนมัติ และปิดทันทีเมื่องานเสร็จ |
-| `awake setup` | ตั้งค่า sudoers rule ปลอดภัย |
+| `awake on [duration]` | เปิดคำขอ Manual On (เช่น `awake on 30m`, `awake on 2h`, `awake on indefinite`) |
+| `awake off` | ปิด Manual On และพัก Activity/Schedule 30 นาที; คำขอ `awake run` ยังทำงานต่อ |
+| `awake status [--json]` | ดูสถานะ แหล่งคำขอ Battery Guard และ recovery state |
+| `awake run <command...>` | รันคำสั่งเป็น argument array พร้อม assertion ของตัวเอง และล้างเฉพาะ lease นี้เมื่อจบ |
+| `awake rule ...` | เพิ่ม/เปิด/ปิดกฎ Activity และ Schedule |
+| `awake set battery-guard\|lid-support on\|off` | ตั้งค่า guard หรือเลือกเปิด lid-closed layer |
+| `awake setup` | ตั้งค่า sudoers เฉพาะ `pmset -a disablesleep 0|1` |
+| `awake recover` | กู้คืน stale leases และค่าระบบที่ Awake บันทึกไว้ |
 | `awake help` | แสดงคู่มือการใช้งานคำสั่ง |
+
+Schedules use local time and selected start weekdays. For example, `fri 22:00 02:00` runs from Friday night through Saturday at 02:00. Automation evaluation stops when the menu bar app quits; explicit `awake run` requests continue independently.
 
 ---
 
 ## 🛡️ การถอนการติดตั้ง (Uninstall)
 ```bash
 make uninstall
+```
+คำสั่งนี้คืนค่า setting ที่ Awake เป็นเจ้าของก่อนลบไฟล์ หากยังมี `awake run` ทำงานอยู่จะหยุดไว้ก่อน ให้คำสั่งนั้นจบแล้วค่อยลองใหม่ หากต้องการถอน sudoers rule ด้วยตนเอง ให้ตรวจไฟล์ก่อนแล้วรัน:
+```bash
+sudo visudo -c
+sudo rm -f /etc/sudoers.d/awake /etc/sudoers.d/mac-awake
+sudo visudo -c
 ```
 
 ## 🌱 Open Source
