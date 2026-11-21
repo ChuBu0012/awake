@@ -1,0 +1,533 @@
+import AppKit
+import SwiftUI
+
+// MARK: - Automations Tab & Rule Builder Views
+extension AwakeSettingsView {
+    var automationsTabView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Configured Automations")
+                        .font(.headline)
+                    Text("Rules that automatically keep your Mac awake")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+
+                Button {
+                    settingsState.showingAddRuleSheet = true
+                } label: {
+                    Label("Add Rule", systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            if let rules = model.status?.rules, !rules.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(rules, id: \.id) { rule in
+                        let isAct = rule.active == true || model.status?.requests.contains(where: { $0.id == "rule:\(rule.id)" }) == true
+                        let appOpen = rule.appOpen == true || isSettingsAppOpen(for: rule)
+                        let statusCol = settingsRuleStatusColor(rule, isActive: isAct, isAppOpen: appOpen)
+
+                        HStack(spacing: 12) {
+                            Image(systemName: rule.kind == "schedule" ? "calendar" : rule.kind == "app_open" ? "app.badge.checkmark" : "terminal")
+                                .font(.title3)
+                                .foregroundColor(isAct ? Color(red: 0.2, green: 0.78, blue: 0.35) : (rule.enabled ? .accentColor : .secondary))
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(rule.name)
+                                    .font(.body.weight(.medium))
+                                HStack(spacing: 6) {
+                                    Text(rule.kind == "schedule" ? "Weekly Schedule" : rule.kind == "app_open" ? "App is open" : "Work process")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Circle()
+                                        .fill(statusCol)
+                                        .frame(width: 7, height: 7)
+                                        .help(settingsRuleStatusTooltip(rule, isActive: isAct, isAppOpen: appOpen))
+                                }
+                            }
+                            Spacer()
+
+                            Button(rule.enabled ? "Pause" : "Resume") {
+                                model.performRuleAction(rule.enabled ? "disable" : "enable", ruleID: rule.id)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button(role: .destructive) {
+                                model.performRuleAction("remove", ruleID: rule.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.leading, 4)
+                        }
+                        .padding(10)
+                        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "sparkles")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    Text("No automations configured yet.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Text("Click 'Add Rule' above to configure automations.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 40)
+            }
+        }
+    }
+
+    // MARK: - Add Rule Modal Sheet
+    var addRuleSheetView: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Add Automation Rule")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    settingsState.showingAddRuleSheet = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                        .font(.body)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Picker("", selection: $settingsState.addRuleType) {
+                Text("Application").tag(0)
+                Text("Work Process").tag(1)
+                Text("Weekly Schedule").tag(2)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: settingsState.addRuleType) { type in
+                if type == 1 {
+                    settingsState.scanRunningProcesses()
+                }
+            }
+
+            if settingsState.addRuleType == 0 {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Watch an Application")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Awake keeps your Mac awake whenever this application is running.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Button("Choose Installed App…") {
+                        settingsState.showingAddRuleSheet = false
+                        onAddApp()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+
+                    Spacer().frame(height: 10)
+                }
+                .padding(.vertical, 8)
+            } else if settingsState.addRuleType == 1 {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Watch a Background Process")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Select a popular developer tool or pick from processes currently running on your Mac.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    // 1. Recommended Worker Presets Grid (Filtered dynamically by installed apps & tools)
+                    if !settingsState.availablePresets.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("RECOMMENDED WORKERS")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.secondary)
+
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+                                ForEach(settingsState.availablePresets) { preset in
+                                    let isSelected = settingsState.newProcessName == preset.processName
+                                    Button {
+                                        settingsState.newProcessName = preset.processName
+                                        settingsState.newProcessDisplayName = preset.name
+                                    } label: {
+                                        HStack(spacing: 8) {
+                                            Image(systemName: preset.icon)
+                                                .font(.system(size: 12))
+                                                .foregroundColor(isSelected ? .white : .accentColor)
+                                                .frame(width: 16)
+
+                                            VStack(alignment: .leading, spacing: 1) {
+                                                Text(preset.name)
+                                                    .font(.system(size: 11, weight: .semibold))
+                                                    .foregroundColor(isSelected ? .white : .primary)
+                                                Text(preset.processName)
+                                                    .font(.system(size: 9, design: .monospaced))
+                                                    .foregroundColor(isSelected ? .white.opacity(0.8) : .secondary)
+                                            }
+                                            Spacer()
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            isSelected ? Color.accentColor : Color.primary.opacity(0.04),
+                                            in: RoundedRectangle(cornerRadius: 6)
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. Currently Running Processes on this Mac
+                    if !settingsState.runningProcesses.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text("RUNNING ON YOUR MAC")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Button("Rescan") {
+                                    settingsState.scanRunningProcesses()
+                                }
+                                .font(.system(size: 10))
+                            }
+
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 5) {
+                                    ForEach(settingsState.runningProcesses.prefix(18), id: \.self) { proc in
+                                        let isSelected = settingsState.newProcessName == proc
+                                        Button {
+                                            settingsState.newProcessName = proc
+                                            if settingsState.newProcessDisplayName.isEmpty {
+                                                settingsState.newProcessDisplayName = proc
+                                            }
+                                        } label: {
+                                            HStack(spacing: 4) {
+                                                Circle()
+                                                    .fill(Color.green)
+                                                    .frame(width: 5, height: 5)
+                                                Text(proc)
+                                                    .font(.system(size: 10, design: .monospaced))
+                                            }
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(
+                                                isSelected ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05),
+                                                in: Capsule()
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. Selected Configuration
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("CONFIGURATION")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.secondary)
+
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Executable Name").font(.caption2).foregroundColor(.secondary)
+                                TextField("e.g. Code Helper, node", text: $settingsState.newProcessName)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(size: 11, design: .monospaced))
+                            }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Display Label").font(.caption2).foregroundColor(.secondary)
+                                TextField("e.g. VS Code Agent", text: $settingsState.newProcessDisplayName)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(size: 11))
+                            }
+                        }
+                    }
+
+                    HStack {
+                        Spacer()
+                        Button("Cancel") { settingsState.showingAddRuleSheet = false }
+                        Button("Add Process Rule") {
+                            let displayName = settingsState.newProcessDisplayName.trimmingCharacters(in: .whitespaces)
+                            let proc = settingsState.newProcessName.trimmingCharacters(in: .whitespaces)
+                            guard !proc.isEmpty else { return }
+                            let name = displayName.isEmpty ? proc : displayName
+                            model.addProcessRule(name: name, processName: proc)
+                            settingsState.newProcessName = ""
+                            settingsState.newProcessDisplayName = ""
+                            settingsState.showingAddRuleSheet = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(settingsState.newProcessName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Add Weekly Schedule")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Awake keeps your Mac awake automatically during defined recurring times.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    // 1. Day Selection
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("ACTIVE DAYS")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button("Weekdays") {
+                                settingsState.selectedDays = ["mon", "tue", "wed", "thu", "fri"]
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
+
+                            Text("•").foregroundColor(.secondary).font(.caption2)
+
+                            Button("Everyday") {
+                                settingsState.selectedDays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
+
+                            Text("•").foregroundColor(.secondary).font(.caption2)
+
+                            Button("Weekends") {
+                                settingsState.selectedDays = ["sat", "sun"]
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
+                        }
+
+                        HStack(spacing: 5) {
+                            ForEach([
+                                ("mon", "Mon"),
+                                ("tue", "Tue"),
+                                ("wed", "Wed"),
+                                ("thu", "Thu"),
+                                ("fri", "Fri"),
+                                ("sat", "Sat"),
+                                ("sun", "Sun")
+                            ], id: \.0) { dayKey, dayLabel in
+                                let isSelected = settingsState.selectedDays.contains(dayKey)
+                                Button {
+                                    if isSelected {
+                                        if settingsState.selectedDays.count > 1 {
+                                            settingsState.selectedDays.remove(dayKey)
+                                        }
+                                    } else {
+                                        settingsState.selectedDays.insert(dayKey)
+                                    }
+                                } label: {
+                                    Text(dayLabel)
+                                        .font(.system(size: 11, weight: isSelected ? .bold : .regular))
+                                        .foregroundColor(isSelected ? .white : .primary)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            isSelected ? Color.accentColor : Color.primary.opacity(0.04),
+                                            in: RoundedRectangle(cornerRadius: 6)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    // 2. Time Window
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("TIME WINDOW")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button("Overnight") {
+                                settingsState.startHour = 22; settingsState.startMinute = 0
+                                settingsState.endHour = 6; settingsState.endMinute = 0
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
+
+                            Text("•").foregroundColor(.secondary).font(.caption2)
+
+                            Button("Workday") {
+                                settingsState.startHour = 9; settingsState.startMinute = 0
+                                settingsState.endHour = 18; settingsState.endMinute = 0
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
+
+                            Text("•").foregroundColor(.secondary).font(.caption2)
+
+                            Button("All Day") {
+                                settingsState.startHour = 0; settingsState.startMinute = 0
+                                settingsState.endHour = 23; settingsState.endMinute = 59
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
+                        }
+
+                        HStack(spacing: 12) {
+                            HStack(spacing: 4) {
+                                Text("Start:").font(.caption.weight(.medium)).foregroundColor(.secondary)
+                                Picker("", selection: $settingsState.startHour) {
+                                    ForEach(0..<24, id: \.self) { h in
+                                        Text(String(format: "%02d", h)).tag(h)
+                                    }
+                                }
+                                .frame(width: 52)
+                                Text(":")
+                                Picker("", selection: $settingsState.startMinute) {
+                                    ForEach([0, 15, 30, 45], id: \.self) { m in
+                                        Text(String(format: "%02d", m)).tag(m)
+                                    }
+                                }
+                                .frame(width: 52)
+                            }
+
+                            Image(systemName: "arrow.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            HStack(spacing: 4) {
+                                Text("End:").font(.caption.weight(.medium)).foregroundColor(.secondary)
+                                Picker("", selection: $settingsState.endHour) {
+                                    ForEach(0..<24, id: \.self) { h in
+                                        Text(String(format: "%02d", h)).tag(h)
+                                    }
+                                }
+                                .frame(width: 52)
+                                Text(":")
+                                Picker("", selection: $settingsState.endMinute) {
+                                    ForEach([0, 15, 30, 45, 59], id: \.self) { m in
+                                        Text(String(format: "%02d", m)).tag(m)
+                                    }
+                                }
+                                .frame(width: 52)
+                            }
+                        }
+                        .padding(8)
+                        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    // 3. Live Summary
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock.badge.checkmark")
+                            .font(.body)
+                            .foregroundColor(.accentColor)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(settingsState.scheduleSummary)
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("Mac will stay awake automatically during this recurring window.")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(8)
+                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+
+                    HStack {
+                        Spacer()
+                        Button("Cancel") { settingsState.showingAddRuleSheet = false }
+                        Button("Add Schedule Rule") {
+                            model.addScheduleRule(
+                                days: settingsState.formattedDays,
+                                start: settingsState.formattedStart,
+                                end: settingsState.formattedEnd
+                            )
+                            settingsState.showingAddRuleSheet = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(settingsState.selectedDays.isEmpty)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 470)
+    }
+
+    func isSettingsAppOpen(for rule: AwakeStatus.Rule) -> Bool {
+        if rule.appOpen == true { return true }
+        let running = NSWorkspace.shared.runningApplications
+        if let bID = rule.bundleID, running.contains(where: { $0.bundleIdentifier == bID }) {
+            return true
+        }
+        let lower = rule.name.lowercased()
+        if lower.contains("visual studio code") || lower.contains("code") {
+            return running.contains(where: { $0.bundleIdentifier == "com.microsoft.VSCode" || $0.bundleIdentifier == "com.microsoft.VSCodeInsiders" })
+        }
+        if lower.contains("cursor") {
+            return running.contains(where: { $0.bundleIdentifier == "com.todesktop.230313mzl4w4u92" })
+        }
+        if lower.contains("claude") {
+            return running.contains(where: { $0.bundleIdentifier == "com.anthropic.claude-desktop" })
+        }
+        if lower.contains("chatgpt") {
+            return running.contains(where: { $0.bundleIdentifier == "com.openai.chat" })
+        }
+        if lower.contains("antigravity") {
+            return running.contains(where: { $0.bundleIdentifier == "com.google.antigravity" })
+        }
+        if lower.contains("xcode") {
+            return running.contains(where: { $0.bundleIdentifier == "com.apple.dt.Xcode" })
+        }
+        return false
+    }
+
+    func settingsRuleStatusColor(_ rule: AwakeStatus.Rule, isActive: Bool, isAppOpen: Bool) -> Color {
+        guard rule.enabled else { return .secondary.opacity(0.6) }
+        if isActive {
+            return Color(red: 0.2, green: 0.78, blue: 0.35)
+        }
+        if rule.kind == "work_process" && isAppOpen {
+            return Color.orange
+        }
+        return .secondary.opacity(0.5)
+    }
+
+    func settingsRuleStatusTooltip(_ rule: AwakeStatus.Rule, isActive: Bool, isAppOpen: Bool) -> String {
+        guard rule.enabled else { return "Rule paused" }
+        switch rule.kind {
+        case "work_process":
+            if isActive {
+                return "Agent / Task running (Active)"
+            } else if isAppOpen {
+                return "App open, idle"
+            } else {
+                return "App closed"
+            }
+        case "app_open":
+            if isActive {
+                return "App is open (Active)"
+            } else {
+                return "App closed"
+            }
+        case "schedule":
+            if isActive {
+                return "Schedule active"
+            } else {
+                return "Outside schedule"
+            }
+        default:
+            return isActive ? "Active" : "Inactive"
+        }
+    }
+}
