@@ -1,0 +1,69 @@
+name: Awake macOS CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Verify (macOS Apple Silicon)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Validate Shell Scripts Syntax
+        run: |
+          echo "==> Checking shell scripts syntax..."
+          bash -n bin/awake
+          bash -n scripts/*.sh
+
+      - name: Run Go Unit Tests & Vet
+        run: |
+          echo "==> Running Go unit tests..."
+          go test -v ./...
+          echo "==> Running Go vet..."
+          go vet ./...
+
+      - name: Run Swift Logic Tests
+        run: |
+          echo "==> Running Swift status logic tests..."
+          ./scripts/test-swift-status.sh
+
+      - name: Build Awake Application Bundle
+        run: |
+          echo "==> Compiling native Swift and Go binaries..."
+          make build
+
+      - name: Verify macOS Minimum Deployment Target
+        run: |
+          echo "==> Verifying minimum macOS 12.0+ deployment target..."
+          ./scripts/verify-macos-target.sh build/Awake.app/Contents/MacOS/Awake build/awake build/Awake.app/Contents/Info.plist
+
+      - name: Package Unsigned Release Preview (.dmg and .zip)
+        run: |
+          echo "==> Creating distributable DMG and ZIP..."
+          make preview
+
+      - name: Upload Release Preview Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Awake-preview-darwin-arm64
+          path: |
+            build/Awake.dmg
+            build/Awake.zip
+          retention-days: 14

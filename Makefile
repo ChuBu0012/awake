@@ -4,6 +4,7 @@ SHELL := /usr/bin/env bash
 APP_NAME := Awake
 BUNDLE_NAME := $(APP_NAME).app
 DMG_NAME := $(APP_NAME).dmg
+ZIP_NAME := $(APP_NAME).zip
 BUILD_DIR := build
 BIN_SRC := bin/awake
 GO_BIN := $(BUILD_DIR)/awake
@@ -18,7 +19,7 @@ INSTALL_BIN_DIR := $(HOME)/.local/bin
 INSTALL_LIB_DIR := $(HOME)/.local/lib/awake
 INSTALL_APP_DIR := $(HOME)/Applications
 
-.PHONY: all build cli dmg icon test clean install setup uninstall help
+.PHONY: all build cli dmg zip preview icon test clean install setup uninstall rerun help
 
 all: build
 
@@ -52,6 +53,23 @@ dmg: build
 	@echo "==> Creating $(DMG_NAME)..."
 	./scripts/create-dmg.sh
 
+## zip: Package the .app bundle into a distributable .zip archive
+zip: build
+	@echo "==> Creating $(ZIP_NAME)..."
+	@codesign -s - --force --deep --options runtime $(BUILD_DIR)/$(BUNDLE_NAME)
+	@rm -f $(BUILD_DIR)/$(ZIP_NAME)
+	@cd $(BUILD_DIR) && zip -r -y -q $(ZIP_NAME) $(BUNDLE_NAME)
+	@echo "==> Created $(BUILD_DIR)/$(ZIP_NAME)"
+
+## preview: Package unsigned Release Candidate (.dmg and .zip) with Ad-hoc code signature
+preview: build dmg zip
+	@echo ""
+	@echo "========================================================"
+	@echo "✅ Private Preview Release Candidate Ready!"
+	@echo "  • DMG: $(BUILD_DIR)/$(DMG_NAME)"
+	@echo "  • ZIP: $(BUILD_DIR)/$(ZIP_NAME)"
+	@echo "========================================================"
+
 ## cli: Build the shared Go engine and CLI for macOS 12+
 cli: $(GO_BIN)
 
@@ -70,6 +88,8 @@ test:
 	bash -n scripts/verify-macos-target.sh
 	bash -n scripts/test-swift-status.sh
 	bash -n scripts/create-dmg.sh
+	bash -n scripts/clean-run.sh
+	bash -n scripts/toggle-appearance.sh
 	./scripts/test-swift-status.sh
 	@echo "==> Running Go tests..."
 	GOTOOLCHAIN=$(GO_TOOLCHAIN) go test ./...
@@ -108,6 +128,11 @@ install: build
 clean:
 	@rm -rf $(BUILD_DIR)
 	@echo "==> Cleaned build directory."
+
+## rerun: Clean runtime state, rebuild, and launch fresh from build/
+rerun:
+	@chmod +x scripts/clean-run.sh
+	@./scripts/clean-run.sh
 
 ## uninstall: Remove installed app, CLI, and configuration
 uninstall:

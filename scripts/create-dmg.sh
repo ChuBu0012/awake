@@ -21,13 +21,17 @@ if [ ! -d "$BUILD_DIR/$BUNDLE_NAME" ]; then
     make -C "$REPO_ROOT" build
 fi
 
-# 2. Setup staging area
+# 2. Apply Ad-hoc code signature for modern macOS Gatekeeper compatibility
+echo "==> Applying Ad-hoc code signature to $BUNDLE_NAME..."
+codesign -s - --force --deep --options runtime "$BUILD_DIR/$BUNDLE_NAME"
+
+# 3. Setup staging area
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 cp -R "$BUILD_DIR/$BUNDLE_NAME" "$STAGING_DIR/"
 ln -s /Applications "$STAGING_DIR/Applications"
 
-# 3. Create compressed UDZO disk image
+# 4. Create compressed UDZO disk image
 echo "==> Creating compressed .dmg via hdiutil..."
 rm -f "$DMG_OUTPUT"
 hdiutil create \
