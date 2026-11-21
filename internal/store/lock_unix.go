@@ -12,7 +12,7 @@ import (
 )
 
 func acquireLock(ctx context.Context, path string, waitLimit time.Duration) (*os.File, error) {
-	fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open Awake state lock: %w", err)
 	}
