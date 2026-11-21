@@ -59,4 +59,4 @@ Last updated: 2026-11-21
 - The connected GitHub repository is public and private vulnerability reporting has been enabled by the maintainer.
 - Implementation is being developed on `feat/awake-foundation` in a separate ignored worktree, from the committed design baseline. Code commits are grouped by engine, macOS integration, and release/readiness documentation.
 - Do not stage, commit, or push the root `AGENTS.md`.
-- Current local verification: Go unit tests and vet pass, and `make build` packages the Swift app and Go CLI on the current host. These checks do not replace a macOS 12 runtime check, notarization, or manual behavior review.
+- Current local verification: `make test` passes (Go tests, `go vet`, shell syntax, Swift app and CLI build); Go CLI cross-builds arm64/amd64 with `minos 12.0`; isolated `build/awake help` and `build/awake status --json` smoke checks pass on macOS 26.7.3 and return `rules: []`. The smoke check used a private temporary config directory. These checks do not replace a macOS 12 runtime check, notarization, or manual UI behavior review.
