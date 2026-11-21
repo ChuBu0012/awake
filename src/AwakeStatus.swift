@@ -40,7 +40,18 @@ struct AwakeStatus: Decodable, Equatable {
 }
 
 enum StatusUpdatePolicy {
+    private static let presetDurations = [1_800, 3_600, 7_200, 14_400, 28_800]
+
     static func shouldPublish(previous: AwakeStatus?, next: AwakeStatus) -> Bool {
         previous != next
+    }
+
+    static func durationSelection(forRemainingSeconds remaining: Int) -> Int {
+        guard remaining > 0 else { return 0 }
+        guard let preset = presetDurations.min(by: { abs($0 - remaining) < abs($1 - remaining) }),
+              abs(preset - remaining) <= 60 else {
+            return remaining
+        }
+        return preset
     }
 }

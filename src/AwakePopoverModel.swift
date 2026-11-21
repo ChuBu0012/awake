@@ -39,7 +39,8 @@ final class AwakePopoverModel: ObservableObject {
 
                 self.status = decoded
                 if let lease = decoded.requests.first(where: { $0.source == "manual" }), let expires = lease.expiresAt {
-                    self.currentDuration = max(0, Int(expires.timeIntervalSinceNow))
+                    let remaining = max(0, Int(expires.timeIntervalSinceNow))
+                    self.currentDuration = StatusUpdatePolicy.durationSelection(forRemainingSeconds: remaining)
                 } else if decoded.requests.contains(where: { $0.source == "manual" }) {
                     self.currentDuration = 0
                 }
