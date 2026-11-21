@@ -1,46 +1,14 @@
 import AppKit
 import Foundation
 import UniformTypeIdentifiers
-
-private struct AwakeStatus: Decodable {
-    struct Lease: Decodable {
-        let id: String
-        let source: String
-        let reason: String
-        let expiresAt: Date?
-        enum CodingKeys: String, CodingKey { case id, source, reason; case expiresAt = "expires_at" }
-    }
-    struct Rule: Decodable {
-        let id: String
-        let name: String
-        let kind: String
-        let enabled: Bool
-    }
-    let active: Bool
-    let batterySuppressed: Bool
-    let batteryGuardEnabled: Bool
-    let lidSupportEnabled: Bool
-    let snoozedUntil: Date?
-    let requests: [Lease]
-    let rules: [Rule]
-    let recoveryPending: Bool
-    enum CodingKeys: String, CodingKey {
-        case active, requests, rules
-        case batterySuppressed = "battery_suppressed"
-        case batteryGuardEnabled = "battery_guard_enabled"
-        case lidSupportEnabled = "lid_support_enabled"
-        case snoozedUntil = "snoozed_until"
-        case recoveryPending = "recovery_pending"
-    }
-}
+import Combine
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
-    private var busy = false
-    private var lastCommandSucceeded = false
-    private var status: AwakeStatus?
-    private var currentDuration = 0
+    private let model = AwakePopoverModel()
+    private var statusObservation: AnyCancellable?
+    private var errorObservation: AnyCancellable?
     private var statusItemTitle: NSMenuItem!
     private var detailItem: NSMenuItem!
     private var toggleItem: NSMenuItem!
@@ -52,12 +20,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
         buildMenu()
-        refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
+        statusObservation = model.$status.sink { [weak self] _ in self?.renderStatus() }
+        errorObservation = model.$errorMessage.compactMap { $0 }.sink { [weak self] message in
+            self?.showError("Awake command failed.\n\n\(message)")
+        }
+        model.refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.model.refresh() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        _ = runCLI(["session-end"])
+        model.endSession()
     }
 
     private func buildMenu() {
@@ -112,48 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    private func refresh() {
-        guard !busy else { return }
-        busy = true
-        let bundles = NSWorkspace.shared.runningApplications.compactMap { $0.bundleIdentifier }.filter { !$0.isEmpty }
-        var args = ["tick", "--automation-owner-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
-        for bundle in Set(bundles) { args += ["--bundle-id", bundle] }
-        workQueue.async { [weak self] in
-            guard let self else { return }
-            _ = self.runCLI(args)
-            let output = self.runCLI(["status", "--json"])
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .custom { decoder in
-                let container = try decoder.singleValueContainer()
-                let value = try container.decode(String.self)
-                let fractional = ISO8601DateFormatter()
-                fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                if let date = fractional.date(from: value) { return date }
-                let standard = ISO8601DateFormatter()
-                standard.formatOptions = [.withInternetDateTime]
-                if let date = standard.date(from: value) { return date }
-                throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid RFC3339 date: \(value)")
-            }
-            let decoded = output.data(using: .utf8).flatMap { try? decoder.decode(AwakeStatus.self, from: $0) }
-            DispatchQueue.main.async {
-                self.busy = false
-                if let decoded {
-                    self.status = decoded
-                    if let lease = decoded.requests.first(where: { $0.source == "manual" }), let expires = lease.expiresAt {
-                        self.currentDuration = max(0, Int(expires.timeIntervalSinceNow))
-                    } else if decoded.requests.contains(where: { $0.source == "manual" }) {
-                        self.currentDuration = 0
-                    }
-                    self.renderStatus()
-                } else {
-                    self.detailItem.title = "Status unavailable — check Awake installation"
-                }
-            }
-        }
-    }
-
     private func renderStatus() {
-        guard let status else { return }
+        guard let status = model.status else { return }
         if status.batterySuppressed {
             statusItemTitle.title = "Awake is paused by Battery Guard"
         } else {
@@ -164,78 +96,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         toggleItem.title = status.requests.contains(where: { $0.source == "manual" }) ? "Turn Off Awake (snooze automations)" : "Turn On Awake"
         batteryItem.state = status.batteryGuardEnabled ? .on : .off
         statusItem.button?.image = NSImage(systemSymbolName: status.active ? "eye" : "moon.zzz", accessibilityDescription: status.active ? "Awake active" : "Awake inactive")
-        for item in durationMenu.items { item.state = item.tag == currentDuration ? .on : .off }
+        for item in durationMenu.items { item.state = item.tag == model.currentDuration ? .on : .off }
         renderRules()
     }
 
-    private func runCLI(_ arguments: [String]) -> String {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: findCLI())
-        process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
-        do {
-            try process.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            lastCommandSucceeded = process.terminationStatus == 0
-            return String(data: data, encoding: .utf8) ?? ""
-        } catch {
-            lastCommandSucceeded = false
-            return ""
-        }
-    }
-
-    private func findCLI() -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let bundledCLI = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Resources/awake", isDirectory: false)
-            .path
-        let candidates = [bundledCLI, "\(home)/.local/bin/awake", "/usr/local/bin/awake", "/opt/homebrew/bin/awake"]
-        return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) ?? "/usr/bin/false"
-    }
-
-    private func perform(_ arguments: [String]) {
-        workQueue.async { [weak self] in
-            guard let self else { return }
-            let output = self.runCLI(arguments)
-                .replacingOccurrences(of: "\u{001B}\\[[0-9;]*m", with: "", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let succeeded = self.lastCommandSucceeded
-            DispatchQueue.main.async {
-                if !succeeded {
-                    let detail = output.isEmpty ? "Check the installation and permissions." : output
-                    self.showError("Awake command failed.\n\n\(detail)")
-                }
-                self.refresh()
-            }
-        }
-    }
-
     @objc private func toggleAwake() {
-        if status?.requests.contains(where: { $0.source == "manual" }) == true {
-            perform(["off"])
-        } else {
-            var args = ["on"]
-            if currentDuration > 0 { args.append("\(currentDuration)s") } else { args.append("indefinite") }
-            args += ["--owner-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
-            perform(args)
-        }
+        model.toggleAwake()
     }
 
     @objc private func selectDuration(_ sender: NSMenuItem) {
-        currentDuration = sender.tag
-        if status?.requests.contains(where: { $0.source == "manual" }) == true {
-            let duration = sender.tag > 0 ? "\(sender.tag)s" : "indefinite"
-            let args = ["on", duration, "--owner-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
-            perform(args)
-        } else { renderStatus() }
+        model.selectDuration(sender.tag)
+        renderStatus()
     }
 
     @objc private func toggleBatteryGuard() {
-        let enabled = status?.batteryGuardEnabled != true
-        perform(["set", "battery-guard", enabled ? "on" : "off"])
+        model.toggleBatteryGuard()
     }
 
     @objc private func addAppRule() {
@@ -251,22 +126,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let name = FileManager.default.displayName(atPath: url.path)
-        let id = "app-" + UUID().uuidString.lowercased()
-        perform(["rule", "app", id, name, bundleID])
+        model.addAppRule(name: name, bundleID: bundleID)
     }
 
     @objc private func addProcessRule() {
         guard let values = prompt(title: "Watch a work process", message: "Enter the exact process name (for example: node). This matches the process while it is running.", fields: ["Process name"]) else { return }
         let name = values[0].trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { showError("Enter a process name."); return }
-        perform(["rule", "process", "process-\(UUID().uuidString.lowercased())", name, name])
+        model.addProcessRule(name: name)
     }
 
     @objc private func addScheduleRule() {
         guard let values = prompt(title: "Add a schedule", message: "Enter weekdays and 24-hour times. Example: mon,tue,wed,thu,fri 22:00 02:00. Overnight schedules use the day they start.", fields: ["Days start end"]) else { return }
         let parts = values[0].split(whereSeparator: \.isWhitespace).map(String.init)
         guard parts.count == 3 else { showError("Use: mon,tue,wed,thu,fri 22:00 02:00"); return }
-        perform(["rule", "schedule", "schedule-\(UUID().uuidString.lowercased())", "Schedule (\(parts[0]))", parts[0], parts[1], parts[2]])
+        model.addScheduleRule(days: parts[0], start: parts[1], end: parts[2])
     }
 
     private func prompt(title: String, message: String, fields: [String]) -> [String]? {
@@ -291,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func renderRules() {
-        guard let status else { return }
+        guard let status = model.status else { return }
         while automationMenu.numberOfItems > 4 { automationMenu.removeItem(at: 4) }
         guard !status.rules.isEmpty else {
             let empty = NSMenuItem(title: "No automations yet", action: nil, keyEquivalent: "")
@@ -317,7 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func ruleAction(_ sender: NSMenuItem) {
         guard let values = sender.representedObject as? [String], values.count == 2 else { return }
-        perform(["rule", values[1], values[0]])
+        model.performRuleAction(values[1], ruleID: values[0])
     }
 
     @objc private func quitApp() { NSApplication.shared.terminate(nil) }
@@ -331,7 +205,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
+@main
+struct AwakeMain {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.run()
+    }
+}

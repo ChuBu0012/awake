@@ -8,7 +8,7 @@ BIN_SRC := bin/awake
 GO_BIN := $(BUILD_DIR)/awake
 GO_TOOLCHAIN := go1.26.4
 GO_SOURCES := $(shell find cmd internal -name '*.go' 2>/dev/null)
-SWIFT_SRC := src/Awake.swift
+SWIFT_SOURCES := $(wildcard src/*.swift)
 SWIFT_TARGET ?= $(shell uname -m)-apple-macos12.0
 PLIST_SRC := config/Info.plist
 ICNS_SRC := config/AppIcon.icns
@@ -34,7 +34,7 @@ build: icon cli
 	@mkdir -p $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources
 	@mkdir -p /tmp/swift-module-cache
 	@chmod +x bin/awake scripts/setup-sudoers.sh scripts/atomic-install-file.sh
-	swiftc -O -target $(SWIFT_TARGET) -module-cache-path /tmp/swift-module-cache $(SWIFT_SRC) -o $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME).new
+	swiftc -O -target $(SWIFT_TARGET) -module-cache-path /tmp/swift-module-cache $(SWIFT_SOURCES) -o $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME).new
 	mv -f $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME).new $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME)
 	cp $(PLIST_SRC) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Info.plist
 	cp $(GO_BIN) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/awake.new
@@ -60,6 +60,8 @@ test:
 	bash -n scripts/setup-sudoers.sh
 	bash -n scripts/atomic-install-file.sh
 	bash -n scripts/verify-macos-target.sh
+	bash -n scripts/test-swift-status.sh
+	./scripts/test-swift-status.sh
 	@echo "==> Running Go tests..."
 	GOTOOLCHAIN=$(GO_TOOLCHAIN) go test ./...
 	@echo "==> Running Go vet..."
