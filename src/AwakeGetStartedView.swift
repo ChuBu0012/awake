@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-// MARK: - Get Started State Model (ObservableObject for Macro-free macOS 12+ compatibility)
+// MARK: - Get Started State Model
 final class AwakeGetStartedModel: ObservableObject {
     @Published var currentStep: Int = 1
 
@@ -20,29 +20,66 @@ final class AwakeGetStartedModel: ObservableObject {
     @Published var scheduleStart: String = "22:00"
     @Published var scheduleEnd: String = "06:00"
     @Published var sudoersConfigured: Bool = false
+    @Published var isCheckingSudoers: Bool = false
+    @Published var isFinishing: Bool = false
 
     func loadDiscoveredApps() {
         discoveredApps = AppRecommendationEngine.discoverRecommendations()
     }
 
     func checkSudoersStatus() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-        process.arguments = ["-n", "pmset", "-a", "disablesleep", "1"]
-        try? process.run()
-        process.waitUntilExit()
-        sudoersConfigured = (process.terminationStatus == 0)
-        if sudoersConfigured {
-            _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/sudo"), arguments: ["-n", "pmset", "-a", "disablesleep", "0"])
+        guard !isCheckingSudoers else { return }
+        isCheckingSudoers = true
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let readProc = Process()
+            let pipe = Pipe()
+            readProc.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+            readProc.arguments = ["-g"]
+            readProc.standardOutput = pipe
+            readProc.standardError = pipe
+            try? readProc.run()
+            let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+            readProc.waitUntilExit()
+
+            let output = String(data: outputData, encoding: .utf8) ?? ""
+            var baseline = "0"
+            for line in output.components(separatedBy: .newlines) {
+                let parts = line.split(whereSeparator: \.isWhitespace)
+                if parts.count >= 2 && parts[0] == "SleepDisabled" {
+                    baseline = String(parts[1])
+                    break
+                }
+            }
+
+            let sudoProc = Process()
+            sudoProc.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+            sudoProc.arguments = ["-n", "/usr/bin/pmset", "-a", "disablesleep", baseline]
+            try? sudoProc.run()
+            sudoProc.waitUntilExit()
+            let configured = (sudoProc.terminationStatus == 0)
+
+            DispatchQueue.main.async {
+                self?.isCheckingSudoers = false
+                self?.sudoersConfigured = configured
+            }
         }
     }
 
     func configureSudoersOnce() {
-        let scriptPath = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/awake").deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("scripts/setup-sudoers.sh").path
-        let fallbackPath = FileManager.default.homeDirectoryForCurrentUser.path + "/Desktop/active_macbook/scripts/setup-sudoers.sh"
-        let targetPath = FileManager.default.fileExists(atPath: scriptPath) ? scriptPath : fallbackPath
+        let currentUser = NSUserName()
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            Bundle.main.url(forResource: "setup-sudoers", withExtension: "sh")?.path,
+            Bundle.main.resourcePath.map { "\($0)/setup-sudoers.sh" },
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/setup-sudoers.sh").path,
+            "\(home)/.local/lib/awake/setup-sudoers.sh",
+            FileManager.default.currentDirectoryPath + "/scripts/setup-sudoers.sh"
+        ].compactMap { $0 }.filter { FileManager.default.isExecutableFile(atPath: $0) || FileManager.default.fileExists(atPath: $0) }
 
-        let appleScript = "do shell script \"bash '\(targetPath)'\" with administrator privileges"
+        guard let targetPath = candidates.first else { return }
+
+        let appleScript = "do shell script \"bash '\(targetPath)' '\(currentUser)'\" with administrator privileges"
         var error: NSDictionary?
         if let scriptObject = NSAppleScript(source: appleScript) {
             scriptObject.executeAndReturnError(&error)
@@ -183,6 +220,7 @@ struct AwakeGetStartedView: View {
             }
             Spacer()
             Toggle("", isOn: isOn)
+                .toggleStyle(.switch)
                 .labelsHidden()
         }
         .padding(14)
@@ -280,7 +318,6 @@ struct AwakeGetStartedView: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
 
-            // Automations summary
             let selectedCount = wizardState.discoveredApps.filter(\.isSelected).count
             HStack(spacing: 12) {
                 Image(systemName: "checkmark.circle.fill")
@@ -298,7 +335,6 @@ struct AwakeGetStartedView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
 
-            // Schedule Config (if chosen)
             if wizardState.goalSchedule {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Weekly Schedule Rule")
@@ -321,7 +357,6 @@ struct AwakeGetStartedView: View {
                 .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
             }
 
-            // Start at Login toggle
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Start Awake when I log in")
@@ -332,12 +367,12 @@ struct AwakeGetStartedView: View {
                 }
                 Spacer()
                 Toggle("", isOn: $wizardState.startAtLogin)
+                    .toggleStyle(.switch)
                     .labelsHidden()
             }
             .padding(12)
             .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
 
-            // Lid-Closed Sudoers Permission
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
@@ -363,6 +398,9 @@ struct AwakeGetStartedView: View {
                         Text("Configure Once…")
                     }
                     .buttonStyle(.borderedProminent)
+                } else {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
                 }
             }
             .padding(12)
@@ -380,6 +418,7 @@ struct AwakeGetStartedView: View {
             } else {
                 Button("Back", action: { wizardState.currentStep -= 1 })
                     .buttonStyle(.bordered)
+                    .disabled(wizardState.isFinishing)
             }
 
             Spacer()
@@ -388,8 +427,9 @@ struct AwakeGetStartedView: View {
                 Button("Continue", action: { wizardState.currentStep += 1 })
                     .buttonStyle(.borderedProminent)
             } else {
-                Button("Start using Awake", action: applyAndFinish)
+                Button(wizardState.isFinishing ? "Saving rules…" : "Start using Awake", action: applyAndFinish)
                     .buttonStyle(.borderedProminent)
+                    .disabled(wizardState.isFinishing)
             }
         }
         .padding(.horizontal, 20)
@@ -425,26 +465,28 @@ struct AwakeGetStartedView: View {
     }
 
     private func applyAndFinish() {
-        // 1. Add selected app rules
-        for app in wizardState.discoveredApps where app.isSelected {
-            switch app.mode {
-            case .workProcess:
-                model.addProcessRule(name: app.name, processName: app.suggestedProcess)
-            case .appOpen:
-                model.addAppRule(name: app.name, bundleID: app.bundleID)
-            }
+        wizardState.isFinishing = true
+
+        let selectedApps = wizardState.discoveredApps.filter(\.isSelected).map { app in
+            (name: app.name,
+             bundleID: app.mode == .appOpen ? app.bundleID : nil,
+             process: app.mode == .workProcess ? app.suggestedProcess : nil,
+             isProcess: app.mode == .workProcess)
         }
 
-        // 2. Add schedule if selected
+        var scheduleConfig: (days: String, start: String, end: String)? = nil
         if wizardState.goalSchedule && !wizardState.scheduleDays.isEmpty {
-            model.addScheduleRule(days: wizardState.scheduleDays, start: wizardState.scheduleStart, end: wizardState.scheduleEnd)
+            scheduleConfig = (days: wizardState.scheduleDays, start: wizardState.scheduleStart, end: wizardState.scheduleEnd)
         }
 
-        // 3. Mark complete & save login preference
-        UserDefaults.standard.set(true, forKey: "hasCompletedGetStarted")
-        UserDefaults.standard.set(wizardState.startAtLogin, forKey: "startAtLogin")
-
-        onFinish()
+        let enableLid = wizardState.goalLidClose && wizardState.sudoersConfigured
+        model.addRulesBatch(apps: selectedApps, schedule: scheduleConfig, enableLidSupport: enableLid) {
+            UserDefaults.standard.set(true, forKey: "hasCompletedGetStarted")
+            UserDefaults.standard.set(wizardState.startAtLogin, forKey: "startAtLogin")
+            LoginItemManager.setEnabled(wizardState.startAtLogin)
+            wizardState.isFinishing = false
+            onFinish()
+        }
     }
 
     private func finishWithoutRules() {

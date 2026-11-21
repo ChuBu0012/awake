@@ -54,7 +54,7 @@ type Status struct {
 	BatterySuppressed bool           `json:"battery_suppressed"`
 	BatteryGuard      bool           `json:"battery_guard_enabled"`
 	LidSupport        bool           `json:"lid_support_enabled"`
-	SnoozedUntil      time.Time      `json:"snoozed_until,omitempty"`
+	SnoozedUntil      *time.Time     `json:"snoozed_until,omitempty"`
 	Requests          []domain.Lease `json:"requests"`
 	Rules             []domain.Rule  `json:"rules"`
 	RecoveryPending   bool           `json:"recovery_pending"`
@@ -400,12 +400,16 @@ func (c *CLI) rule(ctx context.Context, args []string) error {
 }
 
 func statusFrom(state domain.State, evaluation domain.Evaluation) Status {
+	var snoozedUntil *time.Time
+	if !state.SnoozeUntil.IsZero() {
+		snoozedUntil = &state.SnoozeUntil
+	}
 	return Status{
 		Active:            evaluation.Effective,
 		BatterySuppressed: evaluation.BatterySuppressed,
 		BatteryGuard:      state.BatteryGuardEnabled,
 		LidSupport:        state.LidSupportEnabled,
-		SnoozedUntil:      state.SnoozeUntil,
+		SnoozedUntil:      snoozedUntil,
 		Requests:          append([]domain.Lease{}, evaluation.Requests...),
 		Rules:             append([]domain.Rule{}, state.Rules...),
 		RecoveryPending:   state.SleepDisabledBaseline != nil || state.LegacyAssertionPID != nil,
@@ -510,23 +514,38 @@ func validProcessName(value string) bool {
 }
 
 func parseWeekdays(value string) ([]time.Weekday, error) {
-	weekdayMap := map[string]time.Weekday{"sun": time.Sunday, "mon": time.Monday, "tue": time.Tuesday, "wed": time.Wednesday, "thu": time.Thursday, "fri": time.Friday, "sat": time.Saturday}
+	weekdayMap := map[string]time.Weekday{
+		"sun": time.Sunday,
+		"mon": time.Monday,
+		"tue": time.Tuesday,
+		"wed": time.Wednesday,
+		"thu": time.Thursday,
+		"fri": time.Friday,
+		"sat": time.Saturday,
+	}
 	parts := strings.Split(value, ",")
 	days := make([]time.Weekday, 0, len(parts))
 	seen := make(map[time.Weekday]bool)
 	for _, part := range parts {
-		day, ok := weekdayMap[strings.ToLower(part)]
+		cleaned := strings.ToLower(strings.TrimSpace(part))
+		if cleaned == "" {
+			continue
+		}
+		day, ok := weekdayMap[cleaned]
 		if !ok || seen[day] {
-			return nil, fmt.Errorf("invalid or duplicate weekday %q", part)
+			return nil, fmt.Errorf("invalid or duplicate weekday %q", strings.TrimSpace(part))
 		}
 		seen[day] = true
 		days = append(days, day)
+	}
+	if len(days) == 0 {
+		return nil, fmt.Errorf("at least one valid weekday is required")
 	}
 	return days, nil
 }
 
 func parseClockTime(value string) (int, error) {
-	parsed, err := time.Parse("15:04", value)
+	parsed, err := time.Parse("15:04", strings.TrimSpace(value))
 	if err != nil {
 		return 0, fmt.Errorf("time must use 24-hour HH:MM format: %w", err)
 	}

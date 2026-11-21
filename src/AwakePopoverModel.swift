@@ -5,23 +5,42 @@ import Foundation
 final class AwakePopoverModel: ObservableObject {
     @Published private(set) var status: AwakeStatus?
     @Published private(set) var currentDuration = 0
+    @Published private(set) var isBusy = false
+    @Published private(set) var remainingSeconds = 0
+    @Published private(set) var timeRemainingFormatted: String?
     @Published var errorMessage: String?
 
-    private let workQueue = DispatchQueue(label: "app.awake.cli", qos: .utility)
+    private let workQueue = DispatchQueue(label: "app.awake.cli", qos: .userInitiated)
     private let cliPath: String
     private var refreshInFlight = false
+    private var needsRefreshAgain = false
+    private var countdownTimer: Timer?
 
     init(bundleURL: URL = Bundle.main.bundleURL) {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let bundledCLI = bundleURL.appendingPathComponent("Contents/Resources/awake", isDirectory: false).path
-        let candidates = [bundledCLI, "\(home)/.local/bin/awake", "/usr/local/bin/awake", "/opt/homebrew/bin/awake"]
-        cliPath = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) ?? "/usr/bin/false"
+        self.cliPath = Self.resolveCLIPath(bundleURL: bundleURL)
+    }
+
+    deinit {
+        stopCountdownTimer()
+    }
+
+    func clearError() {
+        errorMessage = nil
     }
 
     func refresh() {
-        guard !refreshInFlight else { return }
-        refreshInFlight = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.refreshInFlight {
+                self.needsRefreshAgain = true
+                return
+            }
+            self.refreshInFlight = true
+            self.executeRefresh()
+        }
+    }
 
+    private func executeRefresh() {
         let bundleIDs = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier).filter { !$0.isEmpty })
         var tickArguments = ["tick", "--automation-owner-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
         for bundleID in bundleIDs { tickArguments += ["--bundle-id", bundleID] }
@@ -34,94 +53,310 @@ final class AwakePopoverModel: ObservableObject {
 
             DispatchQueue.main.async {
                 self.refreshInFlight = false
-                guard let decoded else { return }
-                guard StatusUpdatePolicy.shouldPublish(previous: self.status, next: decoded) else { return }
+                let shouldRerun = self.needsRefreshAgain
+                self.needsRefreshAgain = false
 
-                self.status = decoded
-                if let lease = decoded.requests.first(where: { $0.source == "manual" }), let expires = lease.expiresAt {
-                    let remaining = max(0, Int(expires.timeIntervalSinceNow))
-                    self.currentDuration = StatusUpdatePolicy.durationSelection(forRemainingSeconds: remaining)
-                } else if decoded.requests.contains(where: { $0.source == "manual" }) {
-                    self.currentDuration = 0
+                if let decoded {
+                    if StatusUpdatePolicy.shouldPublish(previous: self.status, next: decoded) {
+                        self.status = decoded
+                    }
+                    self.updateRemainingDuration(from: decoded)
+                }
+
+                if shouldRerun {
+                    self.refresh()
                 }
             }
         }
     }
 
     func toggleAwake(ownerPID: Int32 = ProcessInfo.processInfo.processIdentifier) {
+        guard !isBusy else { return }
+
         if status?.requests.contains(where: { $0.source == "manual" }) == true {
-            perform(["off"])
+            performAction(["off"])
             return
         }
 
         var arguments = ["on", currentDuration > 0 ? "\(currentDuration)s" : "indefinite"]
         arguments += ["--owner-pid", "\(ownerPID)"]
-        perform(arguments)
+        performAction(arguments)
     }
 
     func selectDuration(_ seconds: Int, ownerPID: Int32 = ProcessInfo.processInfo.processIdentifier) {
         currentDuration = seconds
         guard status?.requests.contains(where: { $0.source == "manual" }) == true else { return }
+        guard !isBusy else { return }
         let duration = seconds > 0 ? "\(seconds)s" : "indefinite"
-        perform(["on", duration, "--owner-pid", "\(ownerPID)"])
+        performAction(["on", duration, "--owner-pid", "\(ownerPID)"])
     }
 
     func toggleBatteryGuard() {
+        guard !isBusy else { return }
         let enabled = status?.batteryGuardEnabled != true
-        perform(["set", "battery-guard", enabled ? "on" : "off"])
+        performAction(["set", "battery-guard", enabled ? "on" : "off"])
+    }
+
+    func toggleLidSupport() {
+        guard !isBusy else { return }
+        let enabled = status?.lidSupportEnabled != true
+        performAction(["set", "lid-support", enabled ? "on" : "off"])
     }
 
     func addAppRule(name: String, bundleID: String) {
-        perform(["rule", "app", "app-\(UUID().uuidString.lowercased())", name, bundleID])
+        guard !isBusy else { return }
+        let ruleID = "app-\(UUID().uuidString.lowercased())"
+        performAction(["rule", "app", ruleID, name, bundleID])
     }
 
     func addProcessRule(name: String, processName: String? = nil) {
-        let proc = processName ?? name
-        perform(["rule", "process", "process-\(UUID().uuidString.lowercased())", name, proc])
+        guard !isBusy else { return }
+        var proc = (processName ?? name).trimmingCharacters(in: .whitespacesAndNewlines)
+        if proc.contains("/") {
+            proc = URL(fileURLWithPath: proc).lastPathComponent
+        }
+        guard !proc.isEmpty else { return }
+        let displayName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ruleName = displayName.isEmpty ? proc : displayName
+        let ruleID = "process-\(UUID().uuidString.lowercased())"
+        performAction(["rule", "process", ruleID, ruleName, proc])
     }
 
     func addScheduleRule(days: String, start: String, end: String) {
-        perform(["rule", "schedule", "schedule-\(UUID().uuidString.lowercased())", "Schedule (\(days))", days, start, end])
+        guard !isBusy else { return }
+        let cleanDays = days.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanStart = start.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanEnd = end.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ruleID = "schedule-\(UUID().uuidString.lowercased())"
+        performAction(["rule", "schedule", ruleID, "Schedule (\(cleanDays))", cleanDays, cleanStart, cleanEnd])
     }
 
     func performRuleAction(_ action: String, ruleID: String) {
-        perform(["rule", action, ruleID])
+        guard !isBusy else { return }
+        performAction(["rule", action, ruleID])
     }
 
     func endSession() {
+        stopCountdownTimer()
         _ = runCLI(["session-end"])
     }
 
-    private func perform(_ arguments: [String]) {
+    func addRulesBatch(
+        apps: [(name: String, bundleID: String?, process: String?, isProcess: Bool)],
+        schedule: (days: String, start: String, end: String)?,
+        enableLidSupport: Bool = false,
+        completion: @escaping () -> Void
+    ) {
+        isBusy = true
+        errorMessage = nil
+
+        workQueue.async { [weak self] in
+            guard let self else { return }
+            for app in apps {
+                if app.isProcess, let rawProc = app.process {
+                    var proc = rawProc.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if proc.contains("/") {
+                        proc = URL(fileURLWithPath: proc).lastPathComponent
+                    }
+                    if !proc.isEmpty {
+                        let id = "process-\(UUID().uuidString.lowercased())"
+                        _ = self.runCLI(["rule", "process", id, app.name, proc])
+                    }
+                } else if let bID = app.bundleID, !bID.isEmpty {
+                    let id = "app-\(UUID().uuidString.lowercased())"
+                    _ = self.runCLI(["rule", "app", id, app.name, bID])
+                }
+            }
+            if let sched = schedule, !sched.days.isEmpty {
+                let id = "schedule-\(UUID().uuidString.lowercased())"
+                let cleanDays = sched.days.trimmingCharacters(in: .whitespacesAndNewlines)
+                _ = self.runCLI(["rule", "schedule", id, "Schedule (\(cleanDays))", cleanDays, sched.start, sched.end])
+            }
+            if enableLidSupport {
+                _ = self.runCLI(["set", "lid-support", "on"])
+            }
+
+            let result = self.runCLI(["status", "--json"])
+            let decoded = result.succeeded ? Self.decodeStatus(result.output) : nil
+
+            DispatchQueue.main.async {
+                self.isBusy = false
+                if let decoded {
+                    self.status = decoded
+                    self.updateRemainingDuration(from: decoded)
+                }
+                self.refresh()
+                completion()
+            }
+        }
+    }
+
+    private func performAction(_ arguments: [String], completion: (() -> Void)? = nil) {
+        isBusy = true
         errorMessage = nil
         workQueue.async { [weak self] in
             guard let self else { return }
             let result = self.runCLI(arguments)
             let detail = Self.stripANSI(result.output).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            let statusResult = self.runCLI(["status", "--json"])
+            let decoded = statusResult.succeeded ? Self.decodeStatus(statusResult.output) : nil
+
             DispatchQueue.main.async {
+                self.isBusy = false
                 if !result.succeeded {
-                    self.errorMessage = detail.isEmpty ? "Check the installation and permissions." : detail
+                    self.errorMessage = detail.isEmpty ? "Action could not be completed. Check CLI and system permissions." : detail
                 }
-                self.refresh()
+                if let decoded {
+                    self.status = decoded
+                    self.updateRemainingDuration(from: decoded)
+                }
+                completion?()
             }
         }
     }
 
     private func runCLI(_ arguments: [String]) -> CLIResult {
+        executeCLI(arguments)
+    }
+
+    private func executeCLI(_ arguments: [String], timeoutSeconds: Double = 6.0) -> CLIResult {
+        guard FileManager.default.isExecutableFile(atPath: cliPath) else {
+            return CLIResult(output: "Awake CLI executable not found at: \(cliPath)", succeeded: false)
+        }
+
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: cliPath)
         process.arguments = arguments
         process.standardOutput = pipe
         process.standardError = pipe
+
+        let readHandle = pipe.fileHandleForReading
+        var collectedData = Data()
+        let dataLock = NSLock()
+
+        readHandle.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty {
+                dataLock.lock()
+                collectedData.append(chunk)
+                dataLock.unlock()
+            }
+        }
+
         do {
             try process.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            return CLIResult(output: String(data: data, encoding: .utf8) ?? "", succeeded: process.terminationStatus == 0)
         } catch {
+            readHandle.readabilityHandler = nil
             return CLIResult(output: error.localizedDescription, succeeded: false)
         }
+
+        let startTime = Date()
+        while process.isRunning && Date().timeIntervalSince(startTime) < timeoutSeconds {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        if process.isRunning {
+            process.terminate()
+            let killStart = Date()
+            while process.isRunning && Date().timeIntervalSince(killStart) < 0.5 {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
+
+        readHandle.readabilityHandler = nil
+        let remaining = readHandle.readDataToEndOfFile()
+        dataLock.lock()
+        collectedData.append(remaining)
+        let finalData = collectedData
+        dataLock.unlock()
+
+        try? readHandle.close()
+
+        let text = String(data: finalData, encoding: .utf8) ?? ""
+        return CLIResult(output: text, succeeded: process.terminationStatus == 0)
+    }
+
+    private func updateRemainingDuration(from status: AwakeStatus) {
+        if let lease = status.requests.first(where: { $0.source == "manual" }), let expires = lease.expiresAt {
+            let remaining = max(0, Int(expires.timeIntervalSinceNow))
+            self.remainingSeconds = remaining
+            self.currentDuration = StatusUpdatePolicy.durationSelection(forRemainingSeconds: remaining)
+            self.timeRemainingFormatted = Self.formatSeconds(remaining)
+            self.startCountdownTimerIfNeeded()
+        } else if status.requests.contains(where: { $0.source == "manual" }) {
+            self.remainingSeconds = 0
+            self.currentDuration = 0
+            self.timeRemainingFormatted = "Until stopped"
+            self.stopCountdownTimer()
+        } else {
+            self.remainingSeconds = 0
+            self.timeRemainingFormatted = nil
+            self.stopCountdownTimer()
+        }
+    }
+
+    private func startCountdownTimerIfNeeded() {
+        guard countdownTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if self.remainingSeconds > 0 {
+                self.remainingSeconds -= 1
+                self.timeRemainingFormatted = Self.formatSeconds(self.remainingSeconds)
+                if self.remainingSeconds == 0 {
+                    self.refresh()
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        countdownTimer = timer
+    }
+
+    private func stopCountdownTimer() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+    }
+
+    private static func formatSeconds(_ seconds: Int) -> String {
+        if seconds >= 3600 {
+            let hours = seconds / 3600
+            let mins = (seconds % 3600) / 60
+            return "\(hours)h \(mins)m"
+        } else if seconds >= 60 {
+            let mins = seconds / 60
+            let secs = seconds % 60
+            return "\(mins)m \(secs)s"
+        } else if seconds > 0 {
+            return "\(seconds)s"
+        } else {
+            return "Expired"
+        }
+    }
+
+    private static func resolveCLIPath(bundleURL: URL) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let bundledResource = Bundle.main.url(forResource: "awake", withExtension: nil)?.path
+        let resourceFolder = Bundle.main.resourcePath.map { "\($0)/awake" }
+        let bundledCLI = bundleURL.appendingPathComponent("Contents/Resources/awake", isDirectory: false).path
+        let execDir = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("awake").path
+        let cwdBuild = FileManager.default.currentDirectoryPath + "/build/awake"
+
+        let candidates = [
+            bundledResource,
+            resourceFolder,
+            bundledCLI,
+            execDir,
+            "\(home)/.local/bin/awake",
+            "/opt/homebrew/bin/awake",
+            "/usr/local/bin/awake",
+            cwdBuild
+        ].compactMap { $0 }
+
+        return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) ?? "/usr/bin/false"
     }
 
     private static func decodeStatus(_ output: String) -> AwakeStatus? {

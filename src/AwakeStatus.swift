@@ -37,6 +37,36 @@ struct AwakeStatus: Decodable, Equatable {
         case snoozedUntil = "snoozed_until"
         case recoveryPending = "recovery_pending"
     }
+
+    var isSnoozed: Bool {
+        guard let snoozedUntil = snoozedUntil else { return false }
+        return snoozedUntil > Date()
+    }
+
+    var manualLease: Lease? {
+        requests.first(where: { $0.source == "manual" })
+    }
+
+    var isManualActive: Bool {
+        manualLease != nil
+    }
+
+    var activeReasonSummary: String {
+        if batterySuppressed {
+            return "Paused by Battery Guard"
+        }
+        let reasons = requests.map(\.reason).filter { !$0.isEmpty }
+        if !reasons.isEmpty {
+            return reasons.joined(separator: ", ")
+        }
+        if isSnoozed {
+            return "Automations snoozed"
+        }
+        if recoveryPending {
+            return "A sleep setting needs recovery"
+        }
+        return active ? "Awake is preventing sleep" : "Normal sleep behavior"
+    }
 }
 
 enum StatusUpdatePolicy {

@@ -256,3 +256,47 @@ func TestRuleProcessAllowsProcessNameWithSpaces(t *testing.T) {
 		t.Fatalf("unexpected rule contents: %+v", rule)
 	}
 }
+
+func TestParseWeekdaysAndClockTime(t *testing.T) {
+	// Standard with spaces after comma
+	days, err := parseWeekdays("mon, tue, wed, thu, fri")
+	if err != nil {
+		t.Fatalf("expected valid weekdays with spaces, got error: %v", err)
+	}
+	if len(days) != 5 || days[0] != time.Monday || days[4] != time.Friday {
+		t.Fatalf("unexpected weekdays parsed: %v", days)
+	}
+
+	// Without spaces
+	days, err = parseWeekdays("sat,sun")
+	if err != nil {
+		t.Fatalf("expected valid weekdays without spaces, got error: %v", err)
+	}
+	if len(days) != 2 || days[0] != time.Saturday || days[1] != time.Sunday {
+		t.Fatalf("unexpected weekdays parsed: %v", days)
+	}
+
+	// Duplicate check
+	if _, err := parseWeekdays("mon,tue,mon"); err == nil {
+		t.Fatal("expected error for duplicate weekday, got nil")
+	}
+
+	// Invalid check
+	if _, err := parseWeekdays("mon,funday"); err == nil {
+		t.Fatal("expected error for invalid weekday, got nil")
+	}
+
+	// Clock time with spaces
+	mins, err := parseClockTime(" 22:30 ")
+	if err != nil {
+		t.Fatalf("expected valid clock time, got error: %v", err)
+	}
+	if mins != 22*60+30 {
+		t.Fatalf("expected 1350 minutes, got %d", mins)
+	}
+
+	// Invalid clock time
+	if _, err := parseClockTime("25:00"); err == nil {
+		t.Fatal("expected error for invalid clock time, got nil")
+	}
+}

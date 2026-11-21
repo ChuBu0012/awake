@@ -30,6 +30,63 @@ struct AwakeStatusTests {
         expect(!RecommendedAppItem.WatchMode.workProcess.description.isEmpty, "work process mode description must not be empty")
         expect(!RecommendedAppItem.WatchMode.appOpen.description.isEmpty, "app open mode description must not be empty")
 
+        // Status helper properties checks
+        let inactiveStatus = status(active: false)
+        expect(!inactiveStatus.isManualActive, "empty requests must not be manual active")
+        expect(inactiveStatus.activeReasonSummary == "Normal sleep behavior", "inactive reason must report normal sleep behavior")
+
+        let manualStatus = AwakeStatus(
+            active: true,
+            batterySuppressed: false,
+            batteryGuardEnabled: true,
+            lidSupportEnabled: false,
+            snoozedUntil: nil,
+            requests: [AwakeStatus.Lease(id: "manual", source: "manual", reason: "Manual On", expiresAt: nil)],
+            rules: [],
+            recoveryPending: false
+        )
+        expect(manualStatus.isManualActive, "manual request must report isManualActive")
+        expect(manualStatus.activeReasonSummary == "Manual On", "manual active reason must match lease reason")
+
+        let snoozedStatus = AwakeStatus(
+            active: false,
+            batterySuppressed: false,
+            batteryGuardEnabled: true,
+            lidSupportEnabled: false,
+            snoozedUntil: Date().addingTimeInterval(1800),
+            requests: [],
+            rules: [],
+            recoveryPending: false
+        )
+        expect(snoozedStatus.isSnoozed, "future snoozedUntil must be snoozed")
+        expect(snoozedStatus.activeReasonSummary == "Automations snoozed", "snoozed reason must be reported")
+
+        let snoozedWithActiveRequest = AwakeStatus(
+            active: true,
+            batterySuppressed: false,
+            batteryGuardEnabled: true,
+            lidSupportEnabled: true,
+            snoozedUntil: Date().addingTimeInterval(1800),
+            requests: [AwakeStatus.Lease(id: "cmd-1", source: "command", reason: "Long Running Build", expiresAt: nil)],
+            rules: [],
+            recoveryPending: false
+        )
+        expect(snoozedWithActiveRequest.isSnoozed, "future snoozedUntil must be snoozed")
+        expect(snoozedWithActiveRequest.activeReasonSummary == "Long Running Build", "active request reason must take precedence over snoozed automations")
+        expect(snoozedWithActiveRequest.lidSupportEnabled, "lidSupportEnabled must be true when set")
+
+        let suppressedStatus = AwakeStatus(
+            active: false,
+            batterySuppressed: true,
+            batteryGuardEnabled: true,
+            lidSupportEnabled: false,
+            snoozedUntil: nil,
+            requests: [AwakeStatus.Lease(id: "manual", source: "manual", reason: "Manual On", expiresAt: nil)],
+            rules: [],
+            recoveryPending: false
+        )
+        expect(suppressedStatus.activeReasonSummary == "Paused by Battery Guard", "battery suppressed status must be reported")
+
         print("AwakeStatusTests: all checks passed")
     }
 

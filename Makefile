@@ -40,6 +40,8 @@ build: icon cli
 	cp $(PLIST_SRC) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Info.plist
 	cp $(GO_BIN) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/awake.new
 	mv -f $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/awake.new $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/awake
+	cp scripts/setup-sudoers.sh $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/setup-sudoers.sh
+	chmod +x $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/setup-sudoers.sh
 	cp $(ICNS_SRC) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/AppIcon.icns
 	./scripts/verify-macos-target.sh $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME) $(GO_BIN) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Info.plist
 	@chmod +x $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME)
