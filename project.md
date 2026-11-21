@@ -56,6 +56,6 @@ Last updated: 2026-11-21
 ## Repository status
 
 - The connected GitHub repository is public and private vulnerability reporting has been enabled by the maintainer.
-- Implementation is being developed on `feat/awake-foundation` in a separate ignored worktree, from the committed design baseline. Code commits are grouped by engine, macOS integration, and release/readiness documentation.
+- Core implementation is on `feat/awake-foundation` in a separate ignored worktree; the follow-up fix is on `fix/prefer-bundled-cli`, based on that branch. The app now prefers its bundled CLI over an older installed copy and shows CLI error details. Code commits are grouped by concern.
 - Do not stage, commit, or push the root `AGENTS.md`.
 - Current local verification: `make test` passes (Go tests, `go vet`, shell syntax, Swift app and CLI build); the build verifies app, CLI, and Info.plist minimum versions are all 12.0. On a Monterey 12.7.6 Apple Silicon VM, `awake status --json` returned valid empty arrays, `awake run /usr/bin/true` exited successfully without retaining the state lock, and the menu bar app launched and delegated owner/bundle discovery state to the CLI. The state lock now uses `O_CLOEXEC`. Build and install replace executable files atomically to avoid in-place replacement of a running binary. Manual UI behavior review, notarization, and release packaging remain outstanding.
