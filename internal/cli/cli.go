@@ -465,11 +465,11 @@ func parsePID(value string) (int, error) {
 }
 
 func validProcessName(value string) bool {
-	if value == "" || filepath.Base(value) != value || value == "." || value == ".." {
+	if value == "" || value != strings.TrimSpace(value) || filepath.Base(value) != value || value == "." || value == ".." || strings.ContainsAny(value, "/\\\x00\n\r\t") {
 		return false
 	}
 	for _, char := range value {
-		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || strings.ContainsRune("._+-", char)) {
+		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || strings.ContainsRune("._+- ()", char)) {
 			return false
 		}
 	}

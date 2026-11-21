@@ -75,8 +75,9 @@ final class AwakePopoverModel: ObservableObject {
         perform(["rule", "app", "app-\(UUID().uuidString.lowercased())", name, bundleID])
     }
 
-    func addProcessRule(name: String) {
-        perform(["rule", "process", "process-\(UUID().uuidString.lowercased())", name, name])
+    func addProcessRule(name: String, processName: String? = nil) {
+        let proc = processName ?? name
+        perform(["rule", "process", "process-\(UUID().uuidString.lowercased())", name, proc])
     }
 
     func addScheduleRule(days: String, start: String, end: String) {

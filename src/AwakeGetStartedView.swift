@@ -410,12 +410,13 @@ struct AwakeGetStartedView: View {
               let bundleID = Bundle(url: url)?.bundleIdentifier else { return }
 
         let name = FileManager.default.displayName(atPath: url.path)
+        let execName = Bundle(url: url)?.executableURL?.lastPathComponent ?? name
         let item = RecommendedAppItem(
             id: bundleID,
             name: name,
             bundleID: bundleID,
             appURL: url,
-            suggestedProcess: name,
+            suggestedProcess: execName,
             reason: "User custom application",
             mode: .workProcess,
             isSelected: true
@@ -428,7 +429,7 @@ struct AwakeGetStartedView: View {
         for app in wizardState.discoveredApps where app.isSelected {
             switch app.mode {
             case .workProcess:
-                model.addProcessRule(name: app.suggestedProcess)
+                model.addProcessRule(name: app.name, processName: app.suggestedProcess)
             case .appOpen:
                 model.addAppRule(name: app.name, bundleID: app.bundleID)
             }

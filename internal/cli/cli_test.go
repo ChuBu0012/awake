@@ -188,3 +188,71 @@ func (f *fakeCommandRunner) Run(_ context.Context, args []string) (int, error) {
 	f.args = append([]string(nil), args...)
 	return f.exitCode, nil
 }
+
+func TestValidProcessName(t *testing.T) {
+	valid := []string{
+		"node",
+		"swift-frontend",
+		"Code Helper",
+		"Code Helper (Renderer)",
+		"Code Helper (Plugin)",
+		"Google Chrome Helper",
+		"cursor_daemon+v1",
+		"my-proc.bin",
+	}
+	for _, name := range valid {
+		if !validProcessName(name) {
+			t.Errorf("validProcessName(%q) = false, want true", name)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"   ",
+		" Code Helper",
+		"Code Helper ",
+		"/bin/sh",
+		"../proc",
+		".",
+		"..",
+		"proc\nname",
+		"rm -rf *",
+		"foo;bar",
+		"foo|bar",
+		"foo`bar`",
+		"foo$bar",
+	}
+	for _, name := range invalid {
+		if validProcessName(name) {
+			t.Errorf("validProcessName(%q) = true, want false", name)
+		}
+	}
+}
+
+func TestRuleProcessAllowsProcessNameWithSpaces(t *testing.T) {
+	now := time.Date(2026, time.November, 21, 10, 0, 0, 0, time.UTC)
+	adapter := &fakeAdapter{running: make(map[string]domain.ProcessID), now: now}
+	stateStore, err := store.Open(filepath.Join(t.TempDir(), "awake"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := engine.New(stateStore, adapter, func() time.Time { return now })
+	runner := &fakeCommandRunner{exitCode: 0}
+	app := New(coordinator, adapter, runner, &bytes.Buffer{}, &bytes.Buffer{})
+
+	err = app.Run(context.Background(), []string{"rule", "process", "proc-1", "Visual Studio Code", "Code Helper"})
+	if err != nil {
+		t.Fatalf("rule process with spaces failed: %v", err)
+	}
+	state, err := stateStore.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(state.Rules))
+	}
+	rule := state.Rules[0]
+	if rule.Name != "Visual Studio Code" || len(rule.ProcessNames) != 1 || rule.ProcessNames[0] != "Code Helper" {
+		t.Fatalf("unexpected rule contents: %+v", rule)
+	}
+}
