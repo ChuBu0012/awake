@@ -61,7 +61,7 @@ open ~/Applications/Awake.app
 | คำสั่ง | คำอธิบาย |
 |---|---|
 | `awake on [duration]` | เปิดคำขอ Manual On (เช่น `awake on 30m`, `awake on 2h`, `awake on indefinite`) |
-| `awake off` | ปิด Manual On และพัก Activity/Schedule 30 นาที; คำขอ `awake run` ยังทำงานต่อ |
+| `awake off` | ปิด Manual On; กฎ Automations ที่เปิดไว้และคำขอ `awake run` ยังทำงานต่อตามเงื่อนไขปกติ |
 | `awake status [--json]` | ดูสถานะ แหล่งคำขอ Battery Guard และ recovery state |
 | `awake run <command...>` | รันคำสั่งเป็น argument array พร้อม assertion ของตัวเอง และล้างเฉพาะ lease นี้เมื่อจบ |
 | `awake rule ...` | เพิ่ม/เปิด/ปิดกฎ Activity และ Schedule |
@@ -70,7 +70,7 @@ open ~/Applications/Awake.app
 | `awake recover` | กู้คืน stale leases และค่าระบบที่ Awake บันทึกไว้ |
 | `awake help` | แสดงคู่มือการใช้งานคำสั่ง |
 
-Schedules use local time and selected start weekdays. For example, `fri 22:00 02:00` runs from Friday night through Saturday at 02:00. Automation evaluation stops when the menu bar app quits; explicit `awake run` requests continue independently.
+Schedules use local time and selected start weekdays. For example, `fri 22:00 02:00` runs from Friday night through Saturday at 02:00. Automation evaluation stops when the menu bar app quits; explicit `awake run` requests continue independently. Process/app watchers release sleep assertions immediately upon process exit during the current testing phase.
 
 ---
 
