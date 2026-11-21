@@ -7,3 +7,4 @@ build/
 
 # Local agent guidance must remain untracked and must not be published.
 /AGENTS.md
+.worktrees/
