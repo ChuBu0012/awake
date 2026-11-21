@@ -52,6 +52,8 @@ struct AwakePopoverView: View {
         VStack(alignment: .leading, spacing: 12) {
             statusHeader
 
+            reasonBanner
+
             if let error = model.errorMessage {
                 errorBanner(error)
             }
@@ -127,7 +129,48 @@ struct AwakePopoverView: View {
         }
     }
 
+    // MARK: - Reason Header Banner
+    private var reasonBanner: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(isActive ? Color.green : (model.isThermalThrottled || isBatterySuppressed ? Color.orange : Color.secondary.opacity(0.4)))
+                .frame(width: 7, height: 7)
+
+            if model.isThermalThrottled {
+                Text("Thermal Guard: Sleep lock paused (Mac temperature is high)")
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.orange)
+                    .lineLimit(2)
+            } else if isBatterySuppressed {
+                Text("Battery Guard: Sleep lock paused below 20% on battery")
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.orange)
+                    .lineLimit(2)
+            } else if isActive {
+                let reason = isManualOn ? (model.timeRemainingFormatted.map { "Manual timer active (\($0) remaining)" } ?? "Manual sleep lock") : (model.status?.activeReasonSummary ?? "Active task running")
+                Text("Awake: \(reason)")
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.primary)
+                    .lineLimit(2)
+            } else {
+                Text("Normal sleep: Mac will sleep according to macOS settings")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            isActive ? Color.green.opacity(0.08) :
+            (model.isThermalThrottled || isBatterySuppressed ? Color.orange.opacity(0.1) : Color.primary.opacity(0.03)),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+    }
+
     private var statusTitle: String {
+        if model.isThermalThrottled { return "Paused by Heat" }
         guard let status = model.status else { return "Awake" }
         if status.batterySuppressed { return "Paused by Battery" }
         if status.active { return "Awake Active" }
@@ -143,7 +186,7 @@ struct AwakePopoverView: View {
     }
 
     private var statusBadgeBackground: Color {
-        if isBatterySuppressed {
+        if model.isThermalThrottled || isBatterySuppressed {
             return Color.orange.opacity(0.18)
         } else if isActive {
             return Color.green.opacity(0.18)
@@ -153,7 +196,9 @@ struct AwakePopoverView: View {
     }
 
     private var statusIconName: String {
-        if isBatterySuppressed {
+        if model.isThermalThrottled {
+            return "thermometer.sun.fill"
+        } else if isBatterySuppressed {
             return "pause.fill"
         } else if isActive {
             return "eye.fill"
@@ -163,7 +208,7 @@ struct AwakePopoverView: View {
     }
 
     private var statusIconColor: Color {
-        if isBatterySuppressed {
+        if model.isThermalThrottled || isBatterySuppressed {
             return .orange
         } else if isActive {
             return .green
@@ -333,24 +378,12 @@ struct AwakePopoverView: View {
             }
 
             if let rules = model.status?.rules, !rules.isEmpty {
-                if rules.count > 3 {
-                    ScrollView(.vertical, showsIndicators: true) {
-                        VStack(spacing: 5) {
-                            ForEach(rules, id: \.id) { rule in
-                                automationRow(rule)
-                            }
-                        }
-                        .padding(.vertical, 2)
+                VStack(spacing: 6) {
+                    ForEach(rules, id: \.id) { rule in
+                        automationRow(rule)
                     }
-                    .frame(maxHeight: 125)
-                } else {
-                    VStack(spacing: 5) {
-                        ForEach(rules, id: \.id) { rule in
-                            automationRow(rule)
-                        }
-                    }
-                    .padding(.vertical, 2)
                 }
+                .padding(.vertical, 2)
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "bolt.slash")
@@ -373,14 +406,15 @@ struct AwakePopoverView: View {
 
         return HStack(spacing: 8) {
             Image(systemName: ruleIcon(rule.kind))
-                .font(.system(size: 12))
+                .font(.system(size: 13))
                 .foregroundColor(isAct ? Color(red: 0.2, green: 0.78, blue: 0.35) : (rule.enabled ? .accentColor : .secondary))
-                .frame(width: 16)
+                .frame(width: 18)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(rule.name)
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
+                    .layoutPriority(1)
                 HStack(spacing: 6) {
                     Text(ruleKindDescription(rule.kind))
                         .font(.system(size: 10))
@@ -398,7 +432,7 @@ struct AwakePopoverView: View {
                 model.performRuleAction(rule.enabled ? "disable" : "enable", ruleID: rule.id)
             } label: {
                 Image(systemName: rule.enabled ? "pause.circle" : "play.circle")
-                    .font(.system(size: 14))
+                    .font(.system(size: 15))
                     .foregroundColor(rule.enabled ? .secondary : .accentColor)
             }
             .buttonStyle(.plain)
@@ -414,15 +448,14 @@ struct AwakePopoverView: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 12))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
-                    .frame(width: 16, height: 16)
-                    .contentShape(Rectangle())
+                    .padding(3)
             }
             .menuStyle(.borderlessButton)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 7))
     }
 

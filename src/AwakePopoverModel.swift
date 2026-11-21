@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import UserNotifications
 
 // MARK: - Hardened Permission Manager for Sudoers Setup
 enum PermissionError: LocalizedError {
@@ -83,6 +84,7 @@ final class AwakePopoverModel: ObservableObject {
     @Published private(set) var sudoersConfigured = false
     @Published private(set) var remainingSeconds = 0
     @Published private(set) var timeRemainingFormatted: String?
+    @Published private(set) var isThermalThrottled = false
     @Published var errorMessage: String?
 
     private let workQueue = DispatchQueue(label: "app.awake.cli", qos: .userInitiated)
@@ -94,10 +96,55 @@ final class AwakePopoverModel: ObservableObject {
     init(bundleURL: URL = Bundle.main.bundleURL) {
         self.cliPath = Self.resolveCLIPath(bundleURL: bundleURL)
         checkSudoersStatus()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleThermalNotification),
+            name: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil
+        )
+        evaluateThermalState()
     }
 
     deinit {
         stopCountdownTimer()
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleThermalNotification() {
+        DispatchQueue.main.async { [weak self] in
+            self?.evaluateThermalState()
+        }
+    }
+
+    private func evaluateThermalState() {
+        let state = ProcessInfo.processInfo.thermalState
+        let throttled = (state == .serious || state == .critical)
+        let wasThrottled = self.isThermalThrottled
+        self.isThermalThrottled = throttled
+
+        if throttled && !wasThrottled {
+            if status?.active == true {
+                performAction(["off"])
+            }
+            Self.sendNotification(
+                title: "⚠️ Awake: Thermal Guard Activated",
+                body: "Mac temperature is high. Sleep prevention paused to protect hardware and battery."
+            )
+        }
+    }
+
+    static func sendNotification(title: String, subtitle: String? = nil, body: String) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            if let sub = subtitle { content.subtitle = sub }
+            content.body = body
+            content.sound = .default
+            let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+            center.add(request, withCompletionHandler: nil)
+        }
     }
 
     func clearError() {
@@ -133,10 +180,20 @@ final class AwakePopoverModel: ObservableObject {
                 self.needsRefreshAgain = false
 
                 if let decoded {
+                    let wasActive = self.status?.active == true
+                    let isNowActive = decoded.active
                     if StatusUpdatePolicy.shouldPublish(previous: self.status, next: decoded) {
                         self.status = decoded
                     }
                     self.updateRemainingDuration(from: decoded)
+
+                    // Native macOS Notification when active task completes
+                    if wasActive && !isNowActive && !decoded.batterySuppressed && !self.isThermalThrottled {
+                        Self.sendNotification(
+                            title: "Awake: Task Complete",
+                            body: "All tasks finished. Your Mac is now returning to normal sleep."
+                        )
+                    }
                 }
 
                 if shouldRerun {
