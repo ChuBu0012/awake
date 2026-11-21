@@ -4,7 +4,7 @@ Last updated: 2026-11-21
 
 ## Current stage
 
-**Stages 2–3 — Shared engine and first macOS automation slice (implementation in progress).** The Go CLI now owns private state, locking, lease arbitration, Battery Guard, recovery, and macOS sleep adapters. The Swift menu bar app delegates through the CLI and exposes Activity and weekly Schedule rules. Compatibility evidence is recorded below; a real macOS 12 runtime check remains outstanding.
+**Stages 2–3 — Shared engine and first macOS automation slice (implemented).** The Go CLI owns private state, locking, lease arbitration, Battery Guard, recovery, and macOS sleep adapters. The Swift menu bar app delegates through the CLI and exposes Activity and weekly Schedule rules. The app and CLI have both launched and run on macOS 12.7.6 in an Apple Silicon VM. Manual interaction review remains outstanding.
 
 ## Development stages
 
@@ -12,8 +12,8 @@ Last updated: 2026-11-21
 |---|---|---|
 | 0. Open Source baseline | In workspace; not published | MIT license, community policies, contribution/support docs, issue/PR forms, Git workflow, GitHub setup checklist, and sudoers threat/revocation guidance. A standalone privacy policy remains planned. `AGENTS.md` stays local and ignored. |
 | 1. Design readiness | **Prepared** | Cross-platform capabilities, arbitration, state ownership, recovery limits, toolchain constraint, and staged delivery are documented. |
-| 2. Shared engine foundation | **Implemented; macOS 12 runtime gate pending** | Go CLI owns versioned private state, file locking, atomic writes, lease arbitration, battery/lid support, migration, and recovery. Go 1.26.4 cross-builds arm64 and amd64 with macOS 12 deployment target; arm64 ran on the current host. Actual macOS 12 execution still needs a supported machine/CI runner. |
-| 3. macOS automation slice | **Implemented; manual platform review pending** | Swift menu bar delegates state and power changes to the CLI; Activity rules support app-open and exact process names; weekly schedules, snooze, battery guard, and `awake run` share arbitration. Get Started and curated recommendations remain Stage 4. |
+| 2. Shared engine foundation | **Implemented and runtime-verified on macOS 12.7.6** | Go CLI owns versioned private state, file locking, atomic writes, lease arbitration, battery/lid support, migration, and recovery. Go CLI status and `awake run /usr/bin/true` completed successfully on Apple Silicon macOS 12.7.6. A lock descriptor inheritance bug found during this check is fixed with close-on-exec and a regression test. |
+| 3. macOS automation slice | **Implemented; launch/delegation smoke verified** | Swift menu bar delegates state and power changes to the CLI; Activity rules support app-open and exact process names; weekly schedules, snooze, battery guard, and `awake run` share arbitration. The app launched on macOS 12.7.6 and wrote its owner PID and locally observed bundle IDs through the CLI. Manual interaction review remains. Get Started and curated recommendations remain Stage 4. |
 | 4. Get Started and Settings | Pending | Progressive setup, local recommendations, per-rule controls, login item, notifications, and Light/Dark appearance. |
 | 5. Linux support | Pending | systemd-logind engine adapter, explicit capability reporting, validated sessions, and packages with disclosed tray dependencies. |
 | 6. Windows support | Pending | Idle prevention, safe recovery, opt-in AC/DC lid behavior, policy/error handling, and portable package. |
@@ -49,14 +49,13 @@ Last updated: 2026-11-21
 
 ## Decisions still needed
 
-1. **macOS 12 runtime gate:** run the Go CLI and menu bar app on macOS 12; current evidence is cross-compilation and execution on macOS 26.7.3, not a macOS 12 runtime.
-2. **Signing credentials:** verify Apple Developer Program/Developer ID access before preparing a public release; release builds stay gated until signing and notarization can be completed.
-3. **Catalog implementation details:** define exact bundle IDs/process mappings for the initial curated recommendations; current rules can be added locally by the user.
-4. **Universal release build:** verify arm64 and x86_64 app packaging and choose universal or separate labeled downloads.
+1. **Signing credentials:** verify Apple Developer Program/Developer ID access before preparing a public release; release builds stay gated until signing and notarization can be completed.
+2. **Catalog implementation details:** define exact bundle IDs/process mappings for the initial curated recommendations; current rules can be added locally by the user.
+3. **Universal release build:** verify arm64 and x86_64 app packaging and choose universal or separate labeled downloads.
 
 ## Repository status
 
 - The connected GitHub repository is public and private vulnerability reporting has been enabled by the maintainer.
 - Implementation is being developed on `feat/awake-foundation` in a separate ignored worktree, from the committed design baseline. Code commits are grouped by engine, macOS integration, and release/readiness documentation.
 - Do not stage, commit, or push the root `AGENTS.md`.
-- Current local verification: `make test` passes (Go tests, `go vet`, shell syntax, Swift app and CLI build); Go CLI cross-builds arm64/amd64 with `minos 12.0`; isolated `build/awake help` and `build/awake status --json` smoke checks pass on macOS 26.7.3 and return `rules: []`. The smoke check used a private temporary config directory. These checks do not replace a macOS 12 runtime check, notarization, or manual UI behavior review.
+- Current local verification: `make test` passes (Go tests, `go vet`, shell syntax, Swift app and CLI build); the build verifies app, CLI, and Info.plist minimum versions are all 12.0. On a Monterey 12.7.6 Apple Silicon VM, `awake status --json` returned valid empty arrays, `awake run /usr/bin/true` exited successfully without retaining the state lock, and the menu bar app launched and delegated owner/bundle discovery state to the CLI. The state lock now uses `O_CLOEXEC`. Build and install replace executable files atomically to avoid in-place replacement of a running binary. Manual UI behavior review, notarization, and release packaging remain outstanding.
