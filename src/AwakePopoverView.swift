@@ -52,8 +52,6 @@ struct AwakePopoverView: View {
         VStack(alignment: .leading, spacing: 12) {
             statusHeader
 
-            reasonBanner
-
             if let error = model.errorMessage {
                 errorBanner(error)
             }
@@ -129,46 +127,6 @@ struct AwakePopoverView: View {
         }
     }
 
-    // MARK: - Reason Header Banner
-    private var reasonBanner: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(isActive ? Color.green : (model.isThermalThrottled || isBatterySuppressed ? Color.orange : Color.secondary.opacity(0.4)))
-                .frame(width: 7, height: 7)
-
-            if model.isThermalThrottled {
-                Text("Thermal Guard: Sleep lock paused (Mac temperature is high)")
-                    .font(.caption.weight(.medium))
-                    .foregroundColor(.orange)
-                    .lineLimit(2)
-            } else if isBatterySuppressed {
-                Text("Battery Guard: Sleep lock paused below 20% on battery")
-                    .font(.caption.weight(.medium))
-                    .foregroundColor(.orange)
-                    .lineLimit(2)
-            } else if isActive {
-                let reason = isManualOn ? (model.timeRemainingFormatted.map { "Manual timer active (\($0) remaining)" } ?? "Manual sleep lock") : (model.status?.activeReasonSummary ?? "Active task running")
-                Text("Awake: \(reason)")
-                    .font(.caption.weight(.medium))
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
-            } else {
-                Text("Normal sleep: Mac will sleep according to macOS settings")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            isActive ? Color.green.opacity(0.08) :
-            (model.isThermalThrottled || isBatterySuppressed ? Color.orange.opacity(0.1) : Color.primary.opacity(0.03)),
-            in: RoundedRectangle(cornerRadius: 8)
-        )
-    }
-
     private var statusTitle: String {
         if model.isThermalThrottled { return "Paused by Heat" }
         guard let status = model.status else { return "Awake" }
@@ -178,9 +136,15 @@ struct AwakePopoverView: View {
     }
 
     private var statusDetail: String {
+        if model.isThermalThrottled {
+            return "Thermal Guard • High Mac temperature"
+        }
         guard let status = model.status else { return "Checking sleep assertions…" }
+        if status.batterySuppressed {
+            return "Battery Guard • Below 20% on battery"
+        }
         if let timeFormatted = model.timeRemainingFormatted, isManualOn {
-            return "Manual On • \(timeFormatted)"
+            return "Manual timer active • \(timeFormatted) remaining"
         }
         return status.activeReasonSummary
     }
@@ -218,13 +182,18 @@ struct AwakePopoverView: View {
     }
 
     private var assertionStatusIndicator: some View {
-        HStack(spacing: 4) {
+        let isPaused = model.isThermalThrottled || isBatterySuppressed
+        let dotColor: Color = isPaused ? .orange : (isActive ? .green : .secondary.opacity(0.4))
+        let textColor: Color = isPaused ? .orange : (isActive ? .green : .secondary)
+        let labelText: String = isPaused ? "Paused" : (isActive ? "Asserted" : "Idle")
+
+        return HStack(spacing: 4) {
             Circle()
-                .fill(isActive ? Color.green : Color.secondary.opacity(0.4))
+                .fill(dotColor)
                 .frame(width: 6, height: 6)
-            Text(isActive ? "Asserted" : "Idle")
+            Text(labelText)
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(isActive ? .green : .secondary)
+                .foregroundColor(textColor)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
@@ -604,7 +573,7 @@ struct AwakePopoverView: View {
                 HStack(spacing: 5) {
                     Text("Lid-closed Support")
                         .font(.system(size: 12, weight: .medium))
-                    if model.sudoersConfigured {
+                    if model.sudoersConfigured && model.status?.lidSupportEnabled == true && isActive {
                         Text("Active")
                             .font(.system(size: 9, weight: .bold))
                             .foregroundColor(.green)

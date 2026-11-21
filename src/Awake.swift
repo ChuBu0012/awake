@@ -104,11 +104,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         let targetSize = NSSize(width: 18, height: 18)
         let finalImage = NSImage(size: targetSize, flipped: false) { _ in
             let symSize = base.size
+            let scale = min(targetSize.width / max(symSize.width, 1), targetSize.height / max(symSize.height, 1), 1.0)
+            let drawSize = NSSize(width: round(symSize.width * scale), height: round(symSize.height * scale))
             let origin = NSPoint(
-                x: (targetSize.width - symSize.width) / 2.0,
-                y: (targetSize.height - symSize.height) / 2.0
+                x: round((targetSize.width - drawSize.width) / 2.0),
+                y: round((targetSize.height - drawSize.height) / 2.0)
             )
-            base.draw(in: NSRect(origin: origin, size: symSize))
+            base.draw(in: NSRect(origin: origin, size: drawSize))
             return true
         }
         finalImage.isTemplate = true
@@ -117,11 +119,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     // MARK: - Status Bar Item
     private func configureStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         guard let button = statusItem.button else { return }
         button.target = self
         button.action = #selector(togglePopover)
         button.image = AppDelegate.makeMenuBarIcon(symbolName: "moon.zzz")
+        button.imagePosition = .imageOnly
         button.setAccessibilityLabel("Awake")
         button.setAccessibilityHelp("Show Awake status and controls")
         button.toolTip = "Awake"
@@ -135,8 +138,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             super.viewDidLayout()
             let fitting = view.fittingSize
             if fitting.width > 0 && fitting.height > 0 {
-                preferredContentSize = fitting
-                onFittingSizeChange?(fitting)
+                let target = NSSize(width: 340, height: ceil(fitting.height))
+                preferredContentSize = target
+                onFittingSizeChange?(target)
             }
         }
     }
@@ -171,10 +175,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         )
         controller.onFittingSizeChange = { [weak self] size in
             guard let self = self, self.popover.isShown else { return }
-            self.popover.contentSize = size
+            let current = self.popover.contentSize
+            if abs(current.height - size.height) >= 2.0 || current.width != 340 {
+                self.popover.contentSize = NSSize(width: 340, height: size.height)
+            }
         }
         popover.contentViewController = controller
-        popover.contentSize = NSSize(width: 340, height: 460)
+        popover.contentSize = NSSize(width: 340, height: 420)
     }
 
     func popoverDidClose(_ notification: Notification) {
@@ -218,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         if let controller = popover.contentViewController {
             let fitting = controller.view.fittingSize
             if fitting.width > 0 && fitting.height > 0 {
-                popover.contentSize = fitting
+                popover.contentSize = NSSize(width: 340, height: ceil(fitting.height))
             }
         }
         showPopover(relativeTo: button)

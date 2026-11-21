@@ -133,7 +133,7 @@ extension AwakeSettingsView {
                         HStack(spacing: 6) {
                             Text("Lid-closed Support (Clamshell)")
                                 .font(.body.weight(.medium))
-                            Text(settingsState.sudoersConfigured ? (model.status?.lidSupportEnabled == true ? "✓ Verified (Active)" : "✓ Verified (pmset)") : "Setup Needed")
+                            Text(settingsState.sudoersConfigured ? (model.status?.lidSupportEnabled == true ? (model.status?.active == true ? "✓ Active" : "✓ Enabled") : "✓ Configured") : "Setup Needed")
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundColor(settingsState.sudoersConfigured ? .green : .orange)
                                 .padding(.horizontal, 5)
