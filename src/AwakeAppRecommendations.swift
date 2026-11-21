@@ -38,16 +38,16 @@ final class AppRecommendationEngine {
             bundleIDs: ["com.todesktop.230313mzl4w4u92"],
             appNames: ["Cursor.app"],
             process: "Cursor",
-            reason: "AI Code Editor (prevents sleep during background indexing and AI generation)",
-            defaultMode: .workProcess
+            reason: "AI Code Editor (keeps Mac awake while the editor is open)",
+            defaultMode: .appOpen
         ),
         (
             name: "Visual Studio Code",
             bundleIDs: ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders"],
             appNames: ["Visual Studio Code.app", "Code.app"],
-            process: "Code Helper",
-            reason: "Developer Editor (keeps Mac awake during builds, tests, and AI extensions)",
-            defaultMode: .workProcess
+            process: "Code",
+            reason: "Developer Editor (keeps Mac awake while the editor is open)",
+            defaultMode: .appOpen
         ),
         (
             name: "Claude",
@@ -136,6 +136,14 @@ final class AppRecommendationEngine {
             process: "Postman",
             reason: "API Platform (keeps collection runs and monitor tests awake)",
             defaultMode: .appOpen
+        ),
+        (
+            name: "Ollama",
+            bundleIDs: ["com.electron.ollama"],
+            appNames: ["Ollama.app"],
+            process: "ollama",
+            reason: "Local AI Models (keeps Mac awake during local LLM downloads and generation)",
+            defaultMode: .workProcess
         )
     ]
 
