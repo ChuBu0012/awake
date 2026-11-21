@@ -106,20 +106,44 @@
 
 **ไม่ทำ:** จ่ายค่า Apple Developer Program (ไม่ตรงข้อจำกัด) — ถ้ามีผู้สนับสนุนในอนาคตค่อยเพิ่ม notarization
 
-## Phase 6 — พร้อมรับ contributor
+## Phase 6 — ความโปร่งใส & ความปลอดภัยในกระเป๋า (User Visibility & Backpack Safety)
 
-- [ ] ตรวจ `CONTRIBUTING.md` ให้มีขั้นตอน build/test จริง และอ้างถึง `make test`
-- [ ] เพิ่ม `docs/ARCHITECTURE.md` สั้นๆ (1 หน้า): domain → engine → adapter, UI ส่งงานให้ CLI
-- [ ] เพิ่ม `docs/PRIVACY.md`: ทุกอย่างอยู่ในเครื่อง ไม่มี telemetry (project.md ระบุว่า "planned")
-- [ ] ปรับ `SECURITY.md`: อธิบาย sudoers rule, วิธีเพิกถอน, ช่องทางรายงานช่องโหว่ (ตรวจว่าปุ่ม private vulnerability reporting ใช้ได้จริง)
-- [ ] ติดป้าย `good first issue` ให้งานเล็กๆ เช่น แยกไฟล์ Settings, เพิ่มเทส
-- [ ] เพิ่ม `CHANGELOG.md` ให้อัปเดตทุก release
+เป้าหมาย: ทำให้ผู้ใช้รู้เสมอว่าทำไมเครื่องไม่หลับ และพับจอใส่กระเป๋าได้อย่างมั่นใจ 100% ว่าเครื่องจะไม่ร้อนจนพัง
 
-## Phase 7 — ฟีเจอร์ (หลัง Phase 0–3 เสร็จเท่านั้น)
+- [ ] **Reason Header ใน Popover**:
+  - บรรทัดบนสุดของ Popover แสดงเหตุผลเด่นชัดเสมอ:
+    - *ขณะตื่น*: `"🟢 ตื่นอยู่เพราะ: [ชื่อ Task / Agent] (รันมาแล้ว X นาที)"` หรือ `"🟢 ตื่นอยู่เพราะ: Manual On (เหลือ Y นาที)"`
+    - *ขณะหลับปกติ*: `"⚪ สภาพปกติ: เครื่องจะหลับตามที่ macOS กำหนด (ไม่มีงานที่รันค้าง)"`
+- [ ] **Notification เมื่องานเสร็จสิ้น (Completion Alert)**:
+  - ส่ง Native macOS Notification อัตโนมัติเมื่องานจบ:
+    > 🔔 **Awake: งานเสร็จสิ้นแล้ว**
+    > *[ชื่อ Task] ทำงานเสร็จและเข้าสู่โหมด Idle แล้ว — Awake คืนค่าการนอนหลับตามปกติ*
+  - แจ้งเตือนเสมอ ไม่ต้องมี toggle ให้ผู้ใช้ต้องคิดมาก
+- [ ] **Thermal Guard (ป้องกันเครื่องร้อนจัดในกระเป๋า)**:
+  - สังเกต `ProcessInfo.processInfo.thermalState`
+  - หากอุณหภูมิเครื่องเข้าสู่ระดับ `.serious` หรือ `.critical` ให้ตัด sleep prevention ทันที และคืนค่า `pmset -a disablesleep 0` เพื่อให้เครื่องหลับและระบายความร้อน
+  - แสดงสถานะใน Popover: `"🟠 Paused by Thermal Guard (Mac temperature is high)"`
+- [ ] **Max Clamshell Timeout on Battery (เพดาน 2 ชั่วโมงเมื่อพับจอบนแบต)**:
+  - ขณะเสียบสายชาร์จ (AC Power): ทำงานได้ไม่จำกัดเวลาตามที่งานต้องการ
+  - ขณะใช้แบตเตอรี่ (Battery Power) และพับจอ: จำกัดเวลาสูงสุดไม่เกิน 2 ชั่วโมง (120 นาที) ป้องกันกรณีลืมหยิบออกจากกระเป๋าเป้
+- [ ] **Silent Auto-Recovery (กู้คืนอัตโนมัติเมื่อเปิดแอป)**:
+  - ตรวจสอบ `SleepDisabled` ตอนเปิดแอป/CLI เสมอ หากพบค่า `1` ค้างอยู่โดยไม่มี lease ที่ active ให้รีเซ็ตกลับเป็น `0` อัตโนมัติเงียบๆ
 
-- [ ] catalog แอป AI/dev ที่พบในเครื่อง (bundle ID + process name ที่ยืนยันแล้ว) เป็นข้อเสนอแนะ ไม่เปิดอัตโนมัติ
-- [ ] แจ้งเตือนเมื่อ source ที่ active เปลี่ยน (เช่น "Awake เปิดอยู่เพราะ Cursor ทำงาน")
-- [ ] review การเข้าถึง (VoiceOver, Reduce Motion, Light/Dark) ของ popover และ Settings
+## Phase 7 — Smart Activity & ตรวจจับการทำงานจริง (Zero-Config Workload)
+
+เป้าหมาย: เลิกให้ผู้ใช้กรอก PID หรือชื่อ process เอง และไม่เปิด Awake ค้างเพียงเพราะ "แอปเปิดอยู่"
+
+- [ ] **Smart Activity Watcher (CPU-Aware Threshold)**:
+  - ตรวจสอบ CPU Usage ของ Process แอปที่เป็น Agent หรือ Dev Tools
+  - *เกณฑ์ตื่น*: CPU > 5% → Awake เข้าสู่สถานะ Active ทันที
+  - *เกณฑ์ปล่อยหลับ (Hysteresis / Debounce)*: CPU < 5% **ต่อเนื่องกันอย่างน้อย 60 วินาที** (Sustained Idle) จึงปล่อยให้ Mac หลับ ป้องกันการตัดตอนรอเน็ตเวิร์ก/API
+- [ ] **Zero-Input / Tap-to-Enable App Catalog**:
+  - สแกนแอปที่ติดตั้งในเครื่องอัตโนมัติ (Cursor, VS Code, Docker, Xcode, Terminal ฯลฯ)
+  - ผู้ใช้กดคลิกเดียวเพื่อเปิด/ปิดการเฝ้าดู ไม่ต้องพิมพ์ชื่อ process ไม่ต้องพิมพ์ PID
+  - ปรับกฎ "App is open (regardless of activity)" ให้เป็นตัวเลือกรอง โดยมี Smart Activity เป็นค่าเริ่มต้น
+- [ ] **One-Click Agent Hook Integration**:
+  - เพิ่มคำสั่ง `awake hold <id> [--ttl 30m]` และ `awake release <id>` ใน CLI
+  - รองรับการต่อเข้ากับ Claude Code hooks (`SessionStart`, `SessionEnd`) เพื่อให้ Agent รัน Awake เองอัตโนมัติหลังบ้านโดยผู้ใช้ไม่ต้องสั่งคำสั่งนำหน้า
 
 ---
 
