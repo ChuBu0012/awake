@@ -15,12 +15,48 @@ struct LoginItemManager {
         FileManager.default.fileExists(atPath: plistURL.path)
     }
 
-    static func setEnabled(_ enabled: Bool) {
+    static func isLoadedInLaunchctl() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["list", plistLabel]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try? process.run()
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
+    enum LoginItemError: LocalizedError {
+        case fileWriteFailed(String)
+        case launchctlFailed(action: String, status: Int32, message: String)
+        case fileRemoveFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .fileWriteFailed(let reason):
+                return "Failed to write LaunchAgent plist: \(reason)"
+            case .launchctlFailed(let action, let status, let message):
+                let detail = message.isEmpty ? "" : " (\(message))"
+                return "launchctl \(action) failed with exit code \(status)\(detail)"
+            case .fileRemoveFailed(let reason):
+                return "Failed to remove LaunchAgent plist: \(reason)"
+            }
+        }
+    }
+
+    @discardableResult
+    static func setEnabled(_ enabled: Bool) -> Result<Void, LoginItemError> {
         let url = plistURL
         let dir = url.deletingLastPathComponent()
 
         if enabled {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            } catch {
+                return .failure(.fileWriteFailed(error.localizedDescription))
+            }
+
             let home = FileManager.default.homeDirectoryForCurrentUser.path
             let candidates = [
                 "/Applications/Awake.app/Contents/MacOS/Awake",
@@ -47,26 +83,58 @@ struct LoginItemManager {
             </dict>
             </plist>
             """
-            try? plistContent.write(to: url, atomically: true, encoding: .utf8)
+            do {
+                try plistContent.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                return .failure(.fileWriteFailed(error.localizedDescription))
+            }
 
+            // Unload previous instance if any (ignore failure on unload)
             let unloadProc = Process()
             unloadProc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
             unloadProc.arguments = ["unload", url.path]
             try? unloadProc.run()
             unloadProc.waitUntilExit()
 
+            // Load and verify
             let loadProc = Process()
+            let errPipe = Pipe()
+            loadProc.standardError = errPipe
             loadProc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
             loadProc.arguments = ["load", "-w", url.path]
-            try? loadProc.run()
-            loadProc.waitUntilExit()
+            do {
+                try loadProc.run()
+                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                loadProc.waitUntilExit()
+                if loadProc.terminationStatus != 0 {
+                    let errMsg = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    return .failure(.launchctlFailed(action: "load", status: loadProc.terminationStatus, message: errMsg))
+                }
+            } catch {
+                return .failure(.launchctlFailed(action: "load", status: -1, message: error.localizedDescription))
+            }
+
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return .failure(.fileWriteFailed("Plist file not found after creation."))
+            }
+            return .success(())
         } else {
             let process = Process()
+            let errPipe = Pipe()
+            process.standardError = errPipe
             process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
             process.arguments = ["unload", "-w", url.path]
             try? process.run()
             process.waitUntilExit()
-            try? FileManager.default.removeItem(at: url)
+
+            if FileManager.default.fileExists(atPath: url.path) {
+                do {
+                    try FileManager.default.removeItem(at: url)
+                } catch {
+                    return .failure(.fileRemoveFailed(error.localizedDescription))
+                }
+            }
+            return .success(())
         }
     }
 }
@@ -91,12 +159,39 @@ final class AwakeSettingsModel: ObservableObject {
     }
 
     @Published var selectedTab: SettingsTab = .general
-    @Published var startAtLogin: Bool {
-        didSet {
-            UserDefaults.standard.set(startAtLogin, forKey: "startAtLogin")
-            LoginItemManager.setEnabled(startAtLogin)
+    @Published var startAtLogin: Bool = LoginItemManager.isEnabled
+    @Published var isLaunchAgentLoaded: Bool = false
+    @Published var loginItemError: String? = nil
+
+    func checkLaunchAgentStatus() {
+        let isFile = LoginItemManager.isEnabled
+        let isLoaded = LoginItemManager.isLoadedInLaunchctl()
+        DispatchQueue.main.async {
+            self.startAtLogin = isFile
+            self.isLaunchAgentLoaded = isFile && isLoaded
         }
     }
+
+    func checkSystemStatus() {
+        checkSudoersStatus()
+        checkLaunchAgentStatus()
+    }
+
+    func toggleStartAtLogin(_ enabled: Bool) {
+        let result = LoginItemManager.setEnabled(enabled)
+        switch result {
+        case .success:
+            self.startAtLogin = enabled
+            self.isLaunchAgentLoaded = enabled
+            UserDefaults.standard.set(enabled, forKey: "startAtLogin")
+            self.loginItemError = nil
+        case .failure(let error):
+            self.startAtLogin = LoginItemManager.isEnabled
+            self.isLaunchAgentLoaded = LoginItemManager.isEnabled && LoginItemManager.isLoadedInLaunchctl()
+            self.loginItemError = error.localizedDescription
+        }
+    }
+
     @Published var sudoersConfigured: Bool = false
     @Published var isCheckingSudoers: Bool = false
     @Published var pmsetOutput: String = ""
@@ -108,9 +203,219 @@ final class AwakeSettingsModel: ObservableObject {
     @Published var addRuleType: Int = 0
     @Published var newProcessName: String = ""
     @Published var newProcessDisplayName: String = ""
-    @Published var newScheduleDays: String = "mon,tue,wed,thu,fri"
-    @Published var newScheduleStart: String = "22:00"
-    @Published var newScheduleEnd: String = "06:00"
+
+    // Process Presets & Live Scanner
+    struct ProcessPreset: Identifiable {
+        let id: String
+        let name: String
+        let processName: String
+        let icon: String
+        let description: String
+        let bundleIDs: [String]
+        let cliBinaries: [String]
+    }
+
+    let processPresets: [ProcessPreset] = [
+        ProcessPreset(
+            id: "vscode",
+            name: "VS Code Agent / Task",
+            processName: "Code Helper",
+            icon: "chevron.left.forwardslash.chevron.right",
+            description: "Background tasks, builds, agent terminals",
+            bundleIDs: ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders"],
+            cliBinaries: ["code"]
+        ),
+        ProcessPreset(
+            id: "docker",
+            name: "Docker & OrbStack",
+            processName: "docker",
+            icon: "shippingbox",
+            description: "Containers, local dev environments",
+            bundleIDs: ["com.docker.docker", "dev.kdrag0n.MacVirt"],
+            cliBinaries: ["docker", "orbctl"]
+        ),
+        ProcessPreset(
+            id: "node",
+            name: "Node.js Server",
+            processName: "node",
+            icon: "network",
+            description: "Vite, Next.js, Express servers",
+            bundleIDs: [],
+            cliBinaries: ["node", "npm", "pnpm", "yarn", "bun"]
+        ),
+        ProcessPreset(
+            id: "python",
+            name: "Python / Data Science",
+            processName: "python3",
+            icon: "terminal",
+            description: "Scripts, ML models, servers",
+            bundleIDs: ["org.python.python"],
+            cliBinaries: ["python3", "python"]
+        ),
+        ProcessPreset(
+            id: "xcode",
+            name: "Xcode / Swift Compiler",
+            processName: "swift-frontend",
+            icon: "hammer",
+            description: "Swift builds, compilation",
+            bundleIDs: ["com.apple.dt.Xcode"],
+            cliBinaries: ["swift", "xcodebuild"]
+        ),
+        ProcessPreset(
+            id: "cursor",
+            name: "Cursor Agent",
+            processName: "Cursor Helper",
+            icon: "cpu",
+            description: "Cursor background tasks",
+            bundleIDs: ["com.todesktop.230313mzl4w4u92", "com.cursor.Cursor"],
+            cliBinaries: ["cursor"]
+        ),
+        ProcessPreset(
+            id: "claude",
+            name: "Claude Desktop",
+            processName: "Claude Helper",
+            icon: "bubble.left.and.bubble.right",
+            description: "Claude background tasks",
+            bundleIDs: ["com.anthropic.claude-desktop"],
+            cliBinaries: []
+        ),
+        ProcessPreset(
+            id: "blender",
+            name: "Blender 3D Render",
+            processName: "blender",
+            icon: "cube",
+            description: "Rendering, simulation",
+            bundleIDs: ["org.blenderfoundation.blender"],
+            cliBinaries: ["blender"]
+        ),
+        ProcessPreset(
+            id: "terminal",
+            name: "Terminal / Shell",
+            processName: "Terminal",
+            icon: "terminal.fill",
+            description: "Active Terminal sessions",
+            bundleIDs: ["com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable"],
+            cliBinaries: []
+        )
+    ]
+
+    static func isBinaryInstalled(_ binary: String) -> Bool {
+        let fm = FileManager.default
+        var searchPaths = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        ]
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        searchPaths.append("\(home)/.cargo/bin")
+        searchPaths.append("\(home)/.orbstack/bin")
+        searchPaths.append("\(home)/.local/bin")
+        searchPaths.append("\(home)/.bun/bin")
+
+        let nvmBase = "\(home)/.nvm/versions/node"
+        if let subdirs = try? fm.contentsOfDirectory(atPath: nvmBase) {
+            for sub in subdirs {
+                searchPaths.append("\(nvmBase)/\(sub)/bin")
+            }
+        }
+        let pyBase = "/Library/Frameworks/Python.framework/Versions"
+        if let subdirs = try? fm.contentsOfDirectory(atPath: pyBase) {
+            for sub in subdirs {
+                searchPaths.append("\(pyBase)/\(sub)/bin")
+            }
+        }
+
+        if let pathEnv = ProcessInfo.processInfo.environment["PATH"] {
+            searchPaths.append(contentsOf: pathEnv.components(separatedBy: ":"))
+        }
+
+        for dir in searchPaths {
+            let fullPath = "\(dir)/\(binary)"
+            if fm.isExecutableFile(atPath: fullPath) {
+                return true
+            }
+        }
+        return false
+    }
+
+    static func isPresetInstalled(_ preset: ProcessPreset) -> Bool {
+        for bid in preset.bundleIDs {
+            if NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) != nil {
+                return true
+            }
+        }
+        for bin in preset.cliBinaries {
+            if isBinaryInstalled(bin) {
+                return true
+            }
+        }
+        return false
+    }
+
+    var availablePresets: [ProcessPreset] {
+        processPresets.filter { Self.isPresetInstalled($0) }
+    }
+
+    @Published var runningProcesses: [String] = []
+
+    // Schedule UI State
+    @Published var selectedDays: Set<String> = ["mon", "tue", "wed", "thu", "fri"]
+    @Published var startHour: Int = 22
+    @Published var startMinute: Int = 0
+    @Published var endHour: Int = 6
+    @Published var endMinute: Int = 0
+
+    var formattedDays: String {
+        let order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        let active = order.filter { selectedDays.contains($0) }
+        return active.isEmpty ? "mon,tue,wed,thu,fri" : active.joined(separator: ",")
+    }
+
+    var formattedStart: String {
+        String(format: "%02d:%02d", startHour, startMinute)
+    }
+
+    var formattedEnd: String {
+        String(format: "%02d:%02d", endHour, endMinute)
+    }
+
+    var scheduleSummary: String {
+        let order = [("mon", "Mon"), ("tue", "Tue"), ("wed", "Wed"), ("thu", "Thu"), ("fri", "Fri"), ("sat", "Sat"), ("sun", "Sun")]
+        let dayNames = order.filter { selectedDays.contains($0.0) }.map { $0.1 }.joined(separator: ", ")
+        let daysDesc = dayNames.isEmpty ? "No days selected" : dayNames
+        return "\(daysDesc) • \(formattedStart) – \(formattedEnd)"
+    }
+
+    func scanRunningProcesses() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let process = Process()
+            let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/bin/ps")
+            process.arguments = ["-u", NSUserName(), "-o", "comm="]
+            process.standardOutput = pipe
+            try? process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+
+            let output = String(data: data, encoding: .utf8) ?? ""
+            let rawNames = output.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .compactMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0).lastPathComponent }
+                .filter { name in
+                    !name.isEmpty &&
+                    !name.starts(with: "com.apple.") &&
+                    !["ps", "login", "zsh", "bash", "sh", "launchd", "which"].contains(name)
+                }
+
+            let unique = Array(Set(rawNames)).sorted()
+            DispatchQueue.main.async {
+                self?.runningProcesses = unique
+            }
+        }
+    }
 
     init() {
         let isConfigured = LoginItemManager.isEnabled
@@ -177,67 +482,63 @@ final class AwakeSettingsModel: ObservableObject {
 
     func runSelfTest(model: AwakePopoverModel) {
         isTestingAssertion = true
-        testResultSummary = "Activating sleep assertion via Awake…"
+        testResultSummary = "Testing sleep lock with macOS…"
 
         let wasActive = model.status?.active == true
-        if !wasActive {
-            model.toggleAwake()
-        }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            guard let self else { return }
-            let process = Process()
-            let pipe = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
-            process.arguments = ["-g", "assertions"]
-            process.standardOutput = pipe
-            process.standardError = pipe
-            try? process.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            let output = String(data: data, encoding: .utf8) ?? ""
+        let inspectAssertions: () -> Void = { [weak self] in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                let pipe = Pipe()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+                process.arguments = ["-g", "assertions"]
+                process.standardOutput = pipe
+                process.standardError = pipe
+                try? process.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                let output = String(data: data, encoding: .utf8) ?? ""
 
-            self.pmsetOutput = output
-            let hasCaffeinate = output.contains("caffeinate")
-            let hasIdleSleep = output.contains("PreventUserIdleSystemSleep")
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.pmsetOutput = output
+                    let hasCaffeinate = output.contains("caffeinate")
+                    let hasIdleSleep = output.contains("PreventUserIdleSystemSleep")
 
-            if hasCaffeinate || hasIdleSleep {
-                self.testResultSummary = "✅ PASS: Verified with macOS kernel! PreventUserIdleSystemSleep assertion is actively held by caffeinate."
-            } else {
-                self.testResultSummary = "ℹ️ Assertion registered in Awake. Review pmset output below."
-            }
+                    if hasCaffeinate || hasIdleSleep {
+                        self.testResultSummary = "✅ All systems normal. Your Mac won't sleep while Awake is active."
+                    } else {
+                        self.testResultSummary = "Sleep lock check completed. View details below."
+                    }
 
-            if !wasActive {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    model.toggleAwake()
+                    if !wasActive {
+                        model.performAction(["off"]) {
+                            self.isTestingAssertion = false
+                        }
+                    } else {
+                        self.isTestingAssertion = false
+                    }
                 }
             }
-            self.isTestingAssertion = false
+        }
+
+        if !wasActive {
+            model.performAction(["on", "3600"]) {
+                inspectAssertions()
+            }
+        } else {
+            inspectAssertions()
         }
     }
 
     func configureSudoersOnce() {
-        let currentUser = NSUserName()
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = [
-            Bundle.main.url(forResource: "setup-sudoers", withExtension: "sh")?.path,
-            Bundle.main.resourcePath.map { "\($0)/setup-sudoers.sh" },
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/setup-sudoers.sh").path,
-            "\(home)/.local/lib/awake/setup-sudoers.sh",
-            FileManager.default.currentDirectoryPath + "/scripts/setup-sudoers.sh"
-        ].compactMap { $0 }.filter { FileManager.default.isExecutableFile(atPath: $0) || FileManager.default.fileExists(atPath: $0) }
-
-        guard let targetPath = candidates.first else {
-            testResultSummary = "⚠️ setup-sudoers.sh not found. Run 'make setup' in Terminal."
-            return
-        }
-
-        let appleScript = "do shell script \"bash '\(targetPath)' '\(currentUser)'\" with administrator privileges"
-        var error: NSDictionary?
-        if let scriptObject = NSAppleScript(source: appleScript) {
-            scriptObject.executeAndReturnError(&error)
-            if error == nil {
-                checkSudoersStatus()
+        PermissionManager.configureSudoers { [weak self] result in
+            switch result {
+            case .success:
+                self?.checkSudoersStatus()
+                self?.testResultSummary = "✅ Sudoers configured successfully."
+            case .failure(let error):
+                self?.testResultSummary = "⚠️ \(error.localizedDescription)"
             }
         }
     }
@@ -246,10 +547,8 @@ final class AwakeSettingsModel: ObservableObject {
 // MARK: - Native macOS Settings Window View
 struct AwakeSettingsView: View {
     @ObservedObject var model: AwakePopoverModel
-    @StateObject private var settingsState = AwakeSettingsModel()
+    @ObservedObject var settingsState: AwakeSettingsModel
     let onAddApp: () -> Void
-    let onAddProcess: () -> Void
-    let onAddSchedule: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -274,7 +573,7 @@ struct AwakeSettingsView: View {
         }
         .frame(width: 530, height: 470)
         .onAppear {
-            settingsState.checkSudoersStatus()
+            settingsState.checkSystemStatus()
         }
         .sheet(isPresented: $settingsState.showingAddRuleSheet) {
             addRuleSheetView
@@ -344,8 +643,23 @@ struct AwakeSettingsView: View {
 
             // Section 2: Battery & Power
             VStack(alignment: .leading, spacing: 8) {
-                Text("Power & Startup")
-                    .font(.headline)
+                HStack {
+                    Text("Power & Startup")
+                        .font(.headline)
+                    Spacer()
+                    Button {
+                        settingsState.checkSystemStatus()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Re-check")
+                        }
+                        .font(.caption2.weight(.medium))
+                        .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Re-check LaunchAgent and sudoers status")
+                }
 
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -368,19 +682,52 @@ struct AwakeSettingsView: View {
 
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Start Awake at Login")
-                            .font(.body.weight(.medium))
+                        HStack(spacing: 6) {
+                            Text("Start Awake at Login")
+                                .font(.body.weight(.medium))
+                            if settingsState.startAtLogin {
+                                Text(settingsState.isLaunchAgentLoaded ? "✓ Verified (LaunchAgent)" : "Enabled")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundColor(settingsState.isLaunchAgentLoaded ? .green : .orange)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(settingsState.isLaunchAgentLoaded ? Color.green.opacity(0.12) : Color.orange.opacity(0.12), in: Capsule())
+                            }
+                        }
                         Text("Automatically launch Awake in the menu bar when your Mac boots")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                     Spacer()
-                    Toggle("", isOn: $settingsState.startAtLogin)
+                    Toggle("", isOn: Binding(
+                        get: { settingsState.startAtLogin },
+                        set: { settingsState.toggleStartAtLogin($0) }
+                    ))
                         .toggleStyle(.switch)
                         .labelsHidden()
                 }
                 .padding(12)
                 .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
+
+                if let err = settingsState.loginItemError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.caption)
+                        Text(err)
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Button("Dismiss") {
+                            settingsState.loginItemError = nil
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.secondary)
+                    }
+                    .padding(8)
+                    .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                }
             }
 
             // Section 3: Hardware / Clamshell
@@ -393,9 +740,12 @@ struct AwakeSettingsView: View {
                         HStack(spacing: 6) {
                             Text("Lid-closed Support (Clamshell)")
                                 .font(.body.weight(.medium))
-                            Text(settingsState.sudoersConfigured ? (model.status?.lidSupportEnabled == true ? "Enabled" : "Configured") : "Setup Needed")
-                                .font(.caption.weight(.bold))
-                                .foregroundColor(settingsState.sudoersConfigured ? (model.status?.lidSupportEnabled == true ? .green : .secondary) : .orange)
+                            Text(settingsState.sudoersConfigured ? (model.status?.lidSupportEnabled == true ? "✓ Verified (Active)" : "✓ Verified (pmset)") : "Setup Needed")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(settingsState.sudoersConfigured ? .green : .orange)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(settingsState.sudoersConfigured ? Color.green.opacity(0.12) : Color.orange.opacity(0.12), in: Capsule())
                         }
                         Text("Allows keeping Mac awake when closing the lid without password prompts")
                             .font(.caption)
@@ -509,53 +859,183 @@ struct AwakeSettingsView: View {
 
     // MARK: - Add Rule Modal Sheet
     private var addRuleSheetView: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Add Automation Rule")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Add Automation Rule")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    settingsState.showingAddRuleSheet = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                        .font(.body)
+                }
+                .buttonStyle(.plain)
+            }
 
             Picker("", selection: $settingsState.addRuleType) {
-                Text("App").tag(0)
-                Text("Process").tag(1)
-                Text("Schedule").tag(2)
+                Text("Application").tag(0)
+                Text("Work Process").tag(1)
+                Text("Weekly Schedule").tag(2)
             }
             .pickerStyle(.segmented)
+            .onChange(of: settingsState.addRuleType) { type in
+                if type == 1 {
+                    settingsState.scanRunningProcesses()
+                }
+            }
 
             if settingsState.addRuleType == 0 {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Keep Awake while an Application is Open")
-                        .font(.subheadline.weight(.medium))
-                    Text("Choose any installed macOS application. Awake monitors its running state without indexing or network requests.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Watch an Application")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Awake keeps your Mac awake whenever this application is running.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
 
-                    Button("Choose Application…") {
+                    Button("Choose Installed App…") {
                         settingsState.showingAddRuleSheet = false
                         onAddApp()
                     }
                     .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+
+                    Spacer().frame(height: 10)
                 }
                 .padding(.vertical, 8)
             } else if settingsState.addRuleType == 1 {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Keep Awake while a Work Process Runs")
-                        .font(.subheadline.weight(.medium))
-                    Text("Matches active background commands or processes (e.g. node, python3, swift-frontend, docker).")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Watch a Background Process")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Select a popular developer tool or pick from processes currently running on your Mac.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
 
-                    TextField("Process Name (e.g. node)", text: $settingsState.newProcessName)
-                        .textFieldStyle(.roundedBorder)
+                    // 1. Recommended Worker Presets Grid (Filtered dynamically by installed apps & tools)
+                    if !settingsState.availablePresets.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("RECOMMENDED WORKERS")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.secondary)
 
-                    TextField("Display Name (optional)", text: $settingsState.newProcessDisplayName)
-                        .textFieldStyle(.roundedBorder)
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+                                ForEach(settingsState.availablePresets) { preset in
+                                    let isSelected = settingsState.newProcessName == preset.processName
+                                    Button {
+                                        settingsState.newProcessName = preset.processName
+                                        settingsState.newProcessDisplayName = preset.name
+                                    } label: {
+                                        HStack(spacing: 8) {
+                                            Image(systemName: preset.icon)
+                                                .font(.system(size: 12))
+                                                .foregroundColor(isSelected ? .white : .accentColor)
+                                                .frame(width: 16)
+
+                                            VStack(alignment: .leading, spacing: 1) {
+                                                Text(preset.name)
+                                                    .font(.system(size: 11, weight: .semibold))
+                                                    .foregroundColor(isSelected ? .white : .primary)
+                                                Text(preset.processName)
+                                                    .font(.system(size: 9, design: .monospaced))
+                                                    .foregroundColor(isSelected ? .white.opacity(0.8) : .secondary)
+                                            }
+                                            Spacer()
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            isSelected ? Color.accentColor : Color.primary.opacity(0.04),
+                                            in: RoundedRectangle(cornerRadius: 6)
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. Currently Running Processes on this Mac
+                    if !settingsState.runningProcesses.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text("RUNNING ON YOUR MAC")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Button("Rescan") {
+                                    settingsState.scanRunningProcesses()
+                                }
+                                .font(.system(size: 10))
+                            }
+
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 5) {
+                                    ForEach(settingsState.runningProcesses.prefix(18), id: \.self) { proc in
+                                        let isSelected = settingsState.newProcessName == proc
+                                        Button {
+                                            settingsState.newProcessName = proc
+                                            if settingsState.newProcessDisplayName.isEmpty {
+                                                settingsState.newProcessDisplayName = proc
+                                            }
+                                        } label: {
+                                            HStack(spacing: 4) {
+                                                Circle()
+                                                    .fill(Color.green)
+                                                    .frame(width: 5, height: 5)
+                                                Text(proc)
+                                                    .font(.system(size: 10, design: .monospaced))
+                                            }
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(
+                                                isSelected ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05),
+                                                in: Capsule()
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. Selected Configuration
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("CONFIGURATION")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.secondary)
+
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Executable Name").font(.caption2).foregroundColor(.secondary)
+                                TextField("e.g. Code Helper, node", text: $settingsState.newProcessName)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(size: 11, design: .monospaced))
+                            }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Display Label").font(.caption2).foregroundColor(.secondary)
+                                TextField("e.g. VS Code Agent", text: $settingsState.newProcessDisplayName)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(size: 11))
+                            }
+                        }
+                    }
 
                     HStack {
                         Spacer()
                         Button("Cancel") { settingsState.showingAddRuleSheet = false }
                         Button("Add Process Rule") {
-                            let name = settingsState.newProcessDisplayName.isEmpty ? settingsState.newProcessName : settingsState.newProcessDisplayName
-                            guard !settingsState.newProcessName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                            model.addProcessRule(name: name, processName: settingsState.newProcessName.trimmingCharacters(in: .whitespaces))
+                            let displayName = settingsState.newProcessDisplayName.trimmingCharacters(in: .whitespaces)
+                            let proc = settingsState.newProcessName.trimmingCharacters(in: .whitespaces)
+                            guard !proc.isEmpty else { return }
+                            let name = displayName.isEmpty ? proc : displayName
+                            model.addProcessRule(name: name, processName: proc)
                             settingsState.newProcessName = ""
                             settingsState.newProcessDisplayName = ""
                             settingsState.showingAddRuleSheet = false
@@ -565,53 +1045,192 @@ struct AwakeSettingsView: View {
                     }
                 }
             } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Keep Awake on a Weekly Schedule")
-                        .font(.subheadline.weight(.medium))
-                    Text("Keeps your Mac awake during defined recurring windows (e.g. overnight builds).")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Add Weekly Schedule")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Awake keeps your Mac awake automatically during defined recurring times.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
 
-                    TextField("Days (e.g. mon,tue,wed,thu,fri)", text: $settingsState.newScheduleDays)
-                        .textFieldStyle(.roundedBorder)
+                    // 1. Day Selection
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("ACTIVE DAYS")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button("Weekdays") {
+                                settingsState.selectedDays = ["mon", "tue", "wed", "thu", "fri"]
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
 
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Start Time (24h)").font(.caption2).foregroundColor(.secondary)
-                            TextField("22:00", text: $settingsState.newScheduleStart)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 80)
+                            Text("•").foregroundColor(.secondary).font(.caption2)
+
+                            Button("Everyday") {
+                                settingsState.selectedDays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
+
+                            Text("•").foregroundColor(.secondary).font(.caption2)
+
+                            Button("Weekends") {
+                                settingsState.selectedDays = ["sat", "sun"]
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
                         }
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("End Time (24h)").font(.caption2).foregroundColor(.secondary)
-                            TextField("06:00", text: $settingsState.newScheduleEnd)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 80)
+                        HStack(spacing: 5) {
+                            ForEach([
+                                ("mon", "Mon"),
+                                ("tue", "Tue"),
+                                ("wed", "Wed"),
+                                ("thu", "Thu"),
+                                ("fri", "Fri"),
+                                ("sat", "Sat"),
+                                ("sun", "Sun")
+                            ], id: \.0) { dayKey, dayLabel in
+                                let isSelected = settingsState.selectedDays.contains(dayKey)
+                                Button {
+                                    if isSelected {
+                                        if settingsState.selectedDays.count > 1 {
+                                            settingsState.selectedDays.remove(dayKey)
+                                        }
+                                    } else {
+                                        settingsState.selectedDays.insert(dayKey)
+                                    }
+                                } label: {
+                                    Text(dayLabel)
+                                        .font(.system(size: 11, weight: isSelected ? .bold : .regular))
+                                        .foregroundColor(isSelected ? .white : .primary)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            isSelected ? Color.accentColor : Color.primary.opacity(0.04),
+                                            in: RoundedRectangle(cornerRadius: 6)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
                     }
+
+                    // 2. Time Window
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("TIME WINDOW")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button("Overnight") {
+                                settingsState.startHour = 22; settingsState.startMinute = 0
+                                settingsState.endHour = 6; settingsState.endMinute = 0
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
+
+                            Text("•").foregroundColor(.secondary).font(.caption2)
+
+                            Button("Workday") {
+                                settingsState.startHour = 9; settingsState.startMinute = 0
+                                settingsState.endHour = 18; settingsState.endMinute = 0
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
+
+                            Text("•").foregroundColor(.secondary).font(.caption2)
+
+                            Button("All Day") {
+                                settingsState.startHour = 0; settingsState.startMinute = 0
+                                settingsState.endHour = 23; settingsState.endMinute = 59
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10))
+                        }
+
+                        HStack(spacing: 12) {
+                            HStack(spacing: 4) {
+                                Text("Start:").font(.caption.weight(.medium)).foregroundColor(.secondary)
+                                Picker("", selection: $settingsState.startHour) {
+                                    ForEach(0..<24, id: \.self) { h in
+                                        Text(String(format: "%02d", h)).tag(h)
+                                    }
+                                }
+                                .frame(width: 52)
+                                Text(":")
+                                Picker("", selection: $settingsState.startMinute) {
+                                    ForEach([0, 15, 30, 45], id: \.self) { m in
+                                        Text(String(format: "%02d", m)).tag(m)
+                                    }
+                                }
+                                .frame(width: 52)
+                            }
+
+                            Image(systemName: "arrow.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            HStack(spacing: 4) {
+                                Text("End:").font(.caption.weight(.medium)).foregroundColor(.secondary)
+                                Picker("", selection: $settingsState.endHour) {
+                                    ForEach(0..<24, id: \.self) { h in
+                                        Text(String(format: "%02d", h)).tag(h)
+                                    }
+                                }
+                                .frame(width: 52)
+                                Text(":")
+                                Picker("", selection: $settingsState.endMinute) {
+                                    ForEach([0, 15, 30, 45, 59], id: \.self) { m in
+                                        Text(String(format: "%02d", m)).tag(m)
+                                    }
+                                }
+                                .frame(width: 52)
+                            }
+                        }
+                        .padding(8)
+                        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    // 3. Live Summary
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock.badge.checkmark")
+                            .font(.body)
+                            .foregroundColor(.accentColor)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(settingsState.scheduleSummary)
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("Mac will stay awake automatically during this recurring window.")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(8)
+                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
 
                     HStack {
                         Spacer()
                         Button("Cancel") { settingsState.showingAddRuleSheet = false }
                         Button("Add Schedule Rule") {
-                            model.addScheduleRule(days: settingsState.newScheduleDays, start: settingsState.newScheduleStart, end: settingsState.newScheduleEnd)
+                            model.addScheduleRule(
+                                days: settingsState.formattedDays,
+                                start: settingsState.formattedStart,
+                                end: settingsState.formattedEnd
+                            )
                             settingsState.showingAddRuleSheet = false
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(settingsState.selectedDays.isEmpty)
                     }
-                }
-            }
-
-            if settingsState.addRuleType == 0 {
-                HStack {
-                    Spacer()
-                    Button("Cancel") { settingsState.showingAddRuleSheet = false }
                 }
             }
         }
         .padding(20)
-        .frame(width: 420)
+        .frame(width: 470)
     }
 
     // MARK: - About Tab
@@ -672,99 +1291,162 @@ struct AwakeSettingsView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - System Test Tab (Verification & Transparency)
+    // MARK: - System Test Tab (Clear, Modern, Human)
     private var diagnosticsTabView: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.shield.fill")
-                        .foregroundColor(.accentColor)
-                    Text("Power Management Transparency")
-                        .font(.headline)
-                }
-                Text("Awake uses macOS /usr/bin/caffeinate to create native power assertions. Standard sleep prevention does NOT require administrator privileges. Sudo is strictly used only when enabling clamshell mode with lid closed.")
+        VStack(alignment: .leading, spacing: 16) {
+            // Header summary
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Sleep Lock Status")
+                    .font(.headline)
+                Text("Check how Awake prevents your Mac from sleeping.")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                    .lineSpacing(2)
             }
-            .padding(12)
-            .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Live macOS Power Assertions")
-                    .font(.headline)
-
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Current System Assertion")
-                            .font(.body.weight(.medium))
-                        Text(model.status?.active == true ? "ACTIVE — Sleep prevention is registered with macOS" : "INACTIVE — macOS will sleep normally on idle")
-                            .font(.caption)
-                            .foregroundColor(model.status?.active == true ? .green : .secondary)
-                    }
-                    Spacer()
-                    HStack(spacing: 6) {
+            // Status cards
+            VStack(spacing: 10) {
+                // Card 1: Standard Sleep Lock (caffeinate)
+                let isAwakeActive = model.status?.active == true
+                HStack(spacing: 12) {
+                    ZStack {
                         Circle()
-                            .fill(model.status?.active == true ? Color.green : Color.secondary.opacity(0.4))
-                            .frame(width: 8, height: 8)
-                        Text(model.status?.active == true ? "Active" : "Idle")
-                            .font(.caption.weight(.medium))
-                            .foregroundColor(model.status?.active == true ? .green : .secondary)
+                            .fill(isAwakeActive ? Color.green.opacity(0.15) : Color.secondary.opacity(0.1))
+                            .frame(width: 36, height: 36)
+                        Image(systemName: isAwakeActive ? "bolt.fill" : "moon.zzz")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(isAwakeActive ? .green : .secondary)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Color.primary.opacity(0.04), in: Capsule())
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Standard Sleep Lock")
+                            .font(.body.weight(.medium))
+                        Text(isAwakeActive ? "Active — Mac stays awake on idle" : "Idle — Normal macOS sleep behavior")
+                            .font(.caption)
+                            .foregroundColor(isAwakeActive ? .green : .secondary)
+                    }
+
+                    Spacer()
+
+                    Text("caffeinate")
+                        .font(.system(size: 10, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 4))
+                        .foregroundColor(.secondary)
                 }
                 .padding(12)
-                .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
+                .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
 
+                // Card 2: Clamshell / Lid-Closed (pmset)
+                let isLidActive = model.status?.lidSupportEnabled == true
+                let isSudoersReady = settingsState.sudoersConfigured
                 HStack(spacing: 12) {
-                    Button(action: {
-                        settingsState.inspectAssertions()
-                    }) {
-                        Label("Inspect pmset Assertions", systemImage: "magnifyingglass")
+                    ZStack {
+                        Circle()
+                            .fill(isLidActive ? Color.green.opacity(0.15) : (isSudoersReady ? Color.blue.opacity(0.15) : Color.secondary.opacity(0.1)))
+                            .frame(width: 36, height: 36)
+                        Image(systemName: "laptopcomputer")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(isLidActive ? .green : (isSudoersReady ? .blue : .secondary))
                     }
-                    .buttonStyle(.bordered)
 
-                    Button(action: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Lid-Closed Lock")
+                            .font(.body.weight(.medium))
+                        Text(isLidActive ? "Active — Mac stays awake with lid closed" : (isSudoersReady ? "Ready to use" : "Setup needed in General tab"))
+                            .font(.caption)
+                            .foregroundColor(isLidActive ? .green : .secondary)
+                    }
+
+                    Spacer()
+
+                    Text("pmset")
+                        .font(.system(size: 10, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 4))
+                        .foregroundColor(.secondary)
+                }
+                .padding(12)
+                .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
+            }
+
+            // Quick Test Button & Result
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Button {
                         settingsState.runSelfTest(model: model)
-                    }) {
-                        Label(settingsState.isTestingAssertion ? "Verifying…" : "Run Verification Test", systemImage: "play.circle")
+                    } label: {
+                        HStack(spacing: 6) {
+                            if settingsState.isTestingAssertion {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "play.circle.fill")
+                            }
+                            Text(settingsState.isTestingAssertion ? "Testing…" : "Test Sleep Lock")
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(settingsState.isTestingAssertion)
+
+                    if settingsState.isTestingAssertion {
+                        Text("Simulating sleep lock…")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
 
                 if let summary = settingsState.testResultSummary {
-                    Text(summary)
-                        .font(.caption.weight(.medium))
-                        .foregroundColor(summary.contains("PASS") ? .green : .secondary)
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+                    HStack(spacing: 8) {
+                        Image(systemName: summary.contains("normal") ? "checkmark.circle.fill" : "info.circle.fill")
+                            .foregroundColor(summary.contains("normal") ? .green : .accentColor)
+                        Text(summary)
+                            .font(.caption.weight(.medium))
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        (summary.contains("normal") ? Color.green : Color.accentColor).opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
                 }
+            }
 
-                if !settingsState.pmsetOutput.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Output of /usr/bin/pmset -g assertions:")
-                                .font(.caption.weight(.bold))
-                            Spacer()
-                            Text("Official macOS Power Subsystem")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
+            // Collapsible Technical pmset output
+            DisclosureGroup("Technical Details (pmset assertions)") {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Raw output of 'pmset -g assertions':")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button("Refresh") {
+                            settingsState.inspectAssertions()
                         }
+                        .font(.system(size: 10))
+                    }
+
+                    if settingsState.pmsetOutput.isEmpty {
+                        Text("Click Refresh or run a test to inspect assertions.")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .padding(8)
+                    } else {
                         ScrollView(.vertical) {
                             Text(settingsState.pmsetOutput)
-                                .font(.system(size: 10, weight: .regular, design: .monospaced))
+                                .font(.system(size: 10, design: .monospaced))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(8)
                         }
-                        .frame(height: 110)
-                        .background(Color.black.opacity(0.2), in: RoundedRectangle(cornerRadius: 6))
+                        .frame(height: 120)
+                        .background(Color.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
                     }
                 }
+                .padding(.top, 4)
             }
+            .font(.caption)
+            .foregroundColor(.secondary)
         }
     }
 
