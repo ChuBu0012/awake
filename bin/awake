@@ -1,0 +1,371 @@
+#!/usr/bin/env bash
+# bin/awake - CLI Companion for Awake
+# Prevents Mac sleep (including lid-closed/clamshell) when running AI Agents.
+
+set -e
+umask 077
+
+APP_VERSION="1.0.0"
+
+# Use a private per-user directory for control state.
+get_state_dir() {
+    local config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+    [[ "$config_home" = /* ]] || config_home="$HOME/.config"
+    local primary="$config_home/awake"
+    if ! mkdir -p "$primary" 2>/dev/null || [ -L "$primary" ]; then
+        echo "Unable to create a private Awake state directory: $primary" >&2
+        return 1
+    fi
+    chmod 700 "$primary" 2>/dev/null || {
+        echo "Unable to secure Awake state directory: $primary" >&2
+        return 1
+    }
+    if [ "$(stat -f '%u' "$primary" 2>/dev/null || stat -c '%u' "$primary" 2>/dev/null)" != "$(id -u)" ]; then
+        echo "Awake state directory is not owned by the current user: $primary" >&2
+        return 1
+    fi
+    echo "$primary"
+}
+
+STATE_DIR="$(get_state_dir)"
+STATE_FILE="$STATE_DIR/state.json"
+PID_FILE="$STATE_DIR/caffeinate.pid"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Color formatting
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# Helper: Print error and exit
+err() {
+    echo -e "${RED}[Awake ERROR]${NC} $1" >&2
+    exit 1
+}
+
+# Helper: Print info
+info() {
+    echo -e "${BLUE}[Awake]${NC} $1"
+}
+
+# Helper: Check battery percentage and charging state
+get_battery_info() {
+    local batt_output
+    batt_output=$(pmset -g batt 2>/dev/null || true)
+    local is_ac=false
+    local percent=100
+
+    if echo "$batt_output" | grep -q "AC Power"; then
+        is_ac=true
+    fi
+
+    local parsed_percent
+    parsed_percent=$(echo "$batt_output" | grep -o '[0-9]\{1,3\}%' | head -n1 | tr -d '%' || echo "100")
+    if [ -n "$parsed_percent" ]; then
+        percent="$parsed_percent"
+    fi
+
+    echo "$is_ac $percent"
+}
+
+# Helper: Check if battery guard triggers (< 20% on battery)
+check_battery_guard() {
+    read -r is_ac percent <<< "$(get_battery_info)"
+    if [ "$is_ac" = "false" ] && [ "$percent" -le 20 ]; then
+        return 1 # Battery low on battery power
+    fi
+    return 0
+}
+
+# Helper: Parse duration string into seconds (e.g., 30m, 1h, 2h, 4h, 8h, or seconds)
+parse_duration() {
+    local input="${1:-indefinite}"
+    local num multiplier=1
+    case "$input" in
+        indefinite|infinite|0)
+            echo 0
+            ;;
+        *h|*H)
+            local num="${input%[hH]}"
+            multiplier=3600
+            ;;
+        *m|*M)
+            local num="${input%[mM]}"
+            multiplier=60
+            ;;
+        *s|*S)
+            local num="${input%[sS]}"
+            ;;
+        *)
+            if [[ "$input" =~ ^[0-9]+$ ]]; then
+                num="$input"
+            else
+                return 2
+            fi
+            ;;
+    esac
+    [[ "$num" =~ ^[0-9]+$ ]] || return 2
+    # Bound the input before arithmetic to avoid overflow and Bash arithmetic parsing.
+    (( ${#num} <= 7 )) || return 2
+    echo $((10#$num * multiplier))
+}
+
+# Helper: Format seconds to human readable
+format_seconds() {
+    local total=$1
+    if [ "$total" -le 0 ]; then
+        echo "Indefinite"
+        return
+    fi
+    local h=$((total / 3600))
+    local m=$(((total % 3600) / 60))
+    local s=$((total % 60))
+    if [ $h -gt 0 ]; then
+        echo "${h}h ${m}m"
+    elif [ $m -gt 0 ]; then
+        echo "${m}m ${s}s"
+    else
+        echo "${s}s"
+    fi
+}
+
+# Execute sleep disable (sudo pmset + caffeinate)
+do_enable_sleep_prevention() {
+    local duration_str="${1:-indefinite}"
+    local duration_sec
+    duration_sec=$(parse_duration "$duration_str") || err "Invalid duration '$duration_str'. Use a number followed by s, m, or h, or 'indefinite'."
+    local force="${2:-false}"
+
+    if [ "$force" != "true" ]; then
+        if ! check_battery_guard; then
+            read -r is_ac percent <<< "$(get_battery_info)"
+            err "Battery Guard: Battery is at ${percent}% and not charging. Awake mode blocked to protect your Mac. Use --force to override."
+        fi
+    fi
+
+    # Preserve the prior system setting so `off` only undoes Awake's change.
+    local previous_sleep_disabled=0
+    if pmset -g 2>/dev/null | grep -q 'SleepDisabled[[:space:]]*1'; then
+        previous_sleep_disabled=1
+    fi
+    if [ -f "$STATE_FILE" ]; then
+        local saved_value
+        saved_value=$(sed -n 's/.*"previous_sleep_disabled": *\([01]\).*/\1/p' "$STATE_FILE" | head -n1)
+        [[ "$saved_value" =~ ^[01]$ ]] && previous_sleep_disabled="$saved_value"
+    fi
+
+    # 1. Disable sleep in pmset (covers lid close / clamshell)
+    if sudo -n true 2>/dev/null; then
+        sudo pmset -a disablesleep 1
+    else
+        echo -e "${YELLOW}Notice:${NC} Requesting admin permissions to disable sleep on lid close..."
+        sudo pmset -a disablesleep 1
+    fi
+
+    # 2. Start caffeinate in background
+    local caff_pid=""
+    if [ -f "$PID_FILE" ]; then
+        caff_pid=$(cat "$PID_FILE" 2>/dev/null || true)
+        local process_name=""
+        if [[ "$caff_pid" =~ ^[0-9]+$ ]] && kill -0 "$caff_pid" 2>/dev/null; then
+            process_name=$(ps -p "$caff_pid" -o comm= 2>/dev/null || true)
+        fi
+        if [[ ! "$caff_pid" =~ ^[0-9]+$ ]] || [ "${process_name##*/}" != "caffeinate" ]; then
+            caff_pid=""
+        fi
+    fi
+    if [ -z "$caff_pid" ]; then
+        caffeinate -dism >/dev/null 2>&1 &
+        caff_pid=$!
+    fi
+    echo "$caff_pid" > "$PID_FILE"
+
+    # 3. Write state file
+    local now
+    now=$(date +%s)
+    local expires_at=0
+    if [ "$duration_sec" -gt 0 ]; then
+        expires_at=$((now + duration_sec))
+    fi
+
+    local state_tmp
+    state_tmp=$(mktemp "$STATE_DIR/state.XXXXXX") || err "Unable to create state file."
+    cat <<EOF > "$state_tmp"
+{
+  "active": true,
+  "started_at": $now,
+  "duration_seconds": $duration_sec,
+  "expires_at": $expires_at,
+  "caffeinate_pid": $caff_pid,
+  "mode": "manual",
+  "previous_sleep_disabled": $previous_sleep_disabled
+}
+EOF
+    mv -f "$state_tmp" "$STATE_FILE"
+
+    echo -e "${GREEN}✔ Awake is ACTIVE!${NC}"
+    echo "  • Sleep on lid close: DISABLED"
+    echo "  • Kernel idle sleep: DISABLED"
+    echo "  • Duration: $(format_seconds "$duration_sec")"
+    if [ "$expires_at" -gt 0 ]; then
+        echo "  • Auto-off at: $(date -r "$expires_at" '+%H:%M:%S')"
+    fi
+}
+
+# Restore sleep settings
+do_disable_sleep_prevention() {
+    # 1. Kill caffeinate
+    if [ -f "$PID_FILE" ]; then
+        local pid
+        pid=$(cat "$PID_FILE" 2>/dev/null || true)
+        if [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && kill -0 "$pid" 2>/dev/null; then
+            local process_name
+            process_name=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+            case "${process_name##*/}" in
+                caffeinate) kill "$pid" 2>/dev/null || true ;;
+            esac
+        fi
+        rm -f "$PID_FILE"
+    fi
+
+    # 2. Restore the value Awake observed before enabling, defaulting to normal sleep.
+    local restore_value=0
+    if [ -f "$STATE_FILE" ]; then
+        local saved_value
+        saved_value=$(sed -n 's/.*"previous_sleep_disabled": *\([01]\).*/\1/p' "$STATE_FILE" | head -n1)
+        [[ "$saved_value" =~ ^[01]$ ]] && restore_value="$saved_value"
+    fi
+    sudo pmset -a disablesleep "$restore_value" 2>/dev/null || true
+
+    # 3. Clear state file
+    rm -f "$STATE_FILE"
+
+    echo -e "${YELLOW}✔ Awake is INACTIVE.${NC}"
+    echo "  • Standard macOS sleep behavior restored."
+}
+
+# Status report
+show_status() {
+    local sleep_disabled=false
+    if pmset -g 2>/dev/null | grep -q 'SleepDisabled[[:space:]]*1'; then
+        sleep_disabled=true
+    fi
+
+    read -r is_ac percent <<< "$(get_battery_info)"
+    local power_source="Battery"
+    [ "$is_ac" = "true" ] && power_source="AC Power"
+
+    echo -e "${BOLD}=== Awake Status ===${NC}"
+    echo -e "Power Source   : ${BOLD}$power_source ($percent%)${NC}"
+
+    if [ "$sleep_disabled" = "true" ]; then
+        echo -e "Awake Mode     : ${GREEN}${BOLD}ACTIVE${NC}"
+        echo -e "Lid-Closed     : ${GREEN}Won't sleep (Kernel & Clamshell active)${NC}"
+
+        if [ -f "$STATE_FILE" ]; then
+            local started_at expires_at now
+            started_at=$(grep -o '"started_at": [0-9]*' "$STATE_FILE" | awk '{print $2}')
+            expires_at=$(grep -o '"expires_at": [0-9]*' "$STATE_FILE" | awk '{print $2}')
+            now=$(date +%s)
+
+            if [ -n "$expires_at" ] && [ "$expires_at" -gt 0 ]; then
+                local remaining=$((expires_at - now))
+                if [ "$remaining" -gt 0 ]; then
+                    echo -e "Time Remaining : ${BOLD}$(format_seconds "$remaining")${NC} (until $(date -r "$expires_at" '+%H:%M:%S'))"
+                else
+                    echo -e "Time Remaining : ${RED}Expired (Running cleanup...)${NC}"
+                    do_disable_sleep_prevention
+                    return
+                fi
+            else
+                echo -e "Duration       : ${BOLD}Indefinite (Until manually stopped)${NC}"
+            fi
+        fi
+    else
+        echo -e "Awake Mode     : ${YELLOW}INACTIVE${NC}"
+        echo -e "Lid-Closed     : Standard macOS sleep"
+    fi
+}
+
+# Wrapper Mode: run a command while keeping Mac awake, then restore immediately
+run_wrapper() {
+    if [ $# -eq 0 ]; then
+        err "Usage: awake run <command...>"
+    fi
+
+    echo -e "${BLUE}[Awake]${NC} Initializing sleep prevention for command: ${BOLD}$*${NC}"
+    
+    # Enable sleep prevention (indefinite while command runs)
+    do_enable_sleep_prevention "indefinite" "false"
+
+    # Set up trap to guarantee cleanup on exit, interrupt, or error
+    trap 'echo ""; echo -e "${BLUE}[Awake]${NC} Command finished. Restoring sleep..."; do_disable_sleep_prevention' EXIT INT TERM
+
+    echo -e "${BLUE}[Awake]${NC} Running process...\n----------------------------------------"
+    
+    # Execute user command
+    "$@"
+    local exit_code=$?
+
+    echo -e "----------------------------------------\n${BLUE}[Awake]${NC} Process exited with code: $exit_code"
+    return "$exit_code"
+}
+
+# Main routing
+cmd="${1:-status}"
+shift || true
+
+case "$cmd" in
+    on|start)
+        duration="${1:-indefinite}"
+        force="false"
+        if [ "$duration" = "--force" ]; then
+            duration="indefinite"
+            force="true"
+        elif [ "${2:-}" = "--force" ]; then
+            force="true"
+        fi
+        do_enable_sleep_prevention "$duration" "$force"
+        ;;
+    off|stop)
+        do_disable_sleep_prevention
+        ;;
+    status)
+        show_status
+        ;;
+    run|exec)
+        run_wrapper "$@"
+        ;;
+    setup)
+        setup_script="$REPO_ROOT/scripts/setup-sudoers.sh"
+        if [ ! -x "$setup_script" ]; then
+            setup_script="$SCRIPT_DIR/../lib/awake/setup-sudoers.sh"
+        fi
+        [ -x "$setup_script" ] || err "Setup script not found. Reinstall Awake or run make setup from the source checkout."
+        "$setup_script"
+        ;;
+    help|--help|-h)
+        echo -e "${BOLD}Awake CLI (v$APP_VERSION)${NC}"
+        echo "Keep your Mac awake when running AI agents (even when lid is closed)."
+        echo ""
+        echo "Usage:"
+        echo "  awake on [duration] [--force]  Enable awake mode (e.g. 30m, 1h, 2h, 4h, indefinite)"
+        echo "  awake off                      Disable awake mode and restore standard sleep"
+        echo "  awake status                   Show current awake status, timer, and battery"
+        echo "  awake run <command...>         Run a command with auto-awake (cleans up when done)"
+        echo "  awake setup                    Configure passwordless sudo for sleep toggles"
+        echo "  awake help                     Show this help message"
+        echo ""
+        echo "Examples:"
+        echo "  awake on 2h"
+        echo "  awake run agy --goal 'train model overnight'"
+        echo "  awake run python3 heavy_agent.py"
+        ;;
+    *)
+        err "Unknown command '$cmd'. Run 'awake help' for usage."
+        ;;
+esac
