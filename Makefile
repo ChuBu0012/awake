@@ -106,7 +106,8 @@ uninstall:
 	rm -rf $(HOME)/.config/awake $(HOME)/.config/mac-awake
 	@if [ -f /etc/sudoers.d/awake ] || [ -f /etc/sudoers.d/mac-awake ]; then \
 		echo "==> Removing sudoers rules (requires sudo)..."; \
-		sudo rm -f /etc/sudoers.d/awake /etc/sudoers.d/mac-awake 2>/dev/null || true; \
+		sudo rm -f /etc/sudoers.d/awake /etc/sudoers.d/mac-awake; \
+		sudo visudo -c; \
 	fi
 	@echo "==> Uninstallation complete."
 

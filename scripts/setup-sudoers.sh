@@ -10,6 +10,16 @@ SUDOERS_FILE="/etc/sudoers.d/awake"
 TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/awake-sudoers.XXXXXX")
 trap 'rm -f "$TEMP_FILE"' EXIT HUP INT TERM
 
+RESTORE_PENDING=0
+RESTORE_VALUE=""
+restore_sleep_setting() {
+    if [[ "$RESTORE_PENDING" == "1" ]]; then
+        sudo -n /usr/bin/pmset -a disablesleep "$RESTORE_VALUE" 2>/dev/null || true
+        RESTORE_PENDING=0
+    fi
+}
+trap 'restore_sleep_setting; rm -f "$TEMP_FILE"' EXIT
+
 if [[ ! "$CURRENT_USER" =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "ERROR: Current username contains characters that cannot be safely written to sudoers." >&2
     exit 1
@@ -37,8 +47,13 @@ sudo cp "$TEMP_FILE" "$SUDOERS_FILE"
 sudo chmod 0440 "$SUDOERS_FILE"
 echo "==> Successfully installed $SUDOERS_FILE!"
 echo "==> Testing sudo pmset permission without password..."
-if sudo -n pmset -a disablesleep 1 2>/dev/null; then
-    sudo -n pmset -a disablesleep 0 2>/dev/null || true
+ORIGINAL_SLEEP_DISABLED=$(/usr/bin/pmset -g | awk '$1 == "SleepDisabled" { print $2; exit }')
+if [[ "$ORIGINAL_SLEEP_DISABLED" != "0" && "$ORIGINAL_SLEEP_DISABLED" != "1" ]]; then
+    echo "NOTE: Setup completed, but the original SleepDisabled value could not be read for a safe permission check."
+elif sudo -n /usr/bin/pmset -a disablesleep 1 2>/dev/null; then
+    RESTORE_VALUE="$ORIGINAL_SLEEP_DISABLED"
+    RESTORE_PENDING=1
+    restore_sleep_setting
     echo "==> Sudoers check PASSED! You can now toggle sleep without passwords."
 else
     echo "NOTE: Setup completed, but sudo -n check requires password or session refresh."

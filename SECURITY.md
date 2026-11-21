@@ -19,4 +19,19 @@ Please allow the maintainer reasonable time to investigate and prepare a fix bef
 
 ## Security-sensitive behavior
 
-Awake changes a system-wide sleep setting and can install a sudoers rule for a narrowly scoped `pmset` command. Review the scripts before granting administrator access, and disable Awake when it is no longer needed.
+Awake's normal idle-sleep prevention uses a per-request `caffeinate` process. Optional lid-closed support changes the system-wide `SleepDisabled` setting and can install `/etc/sudoers.d/awake` for these exact commands only:
+
+- `/usr/bin/pmset -a disablesleep 0`
+- `/usr/bin/pmset -a disablesleep 1`
+
+The rule does not grant access to arbitrary `pmset` commands or a shell. It does let any process running as the configured user invoke those two exact commands without a password while the rule exists. A compromised user account can therefore keep the Mac awake or change the system sleep toggle, which can drain the battery or prevent expected sleep. Awake captures the prior setting before applying its own change and restores it when the last request ends; forced termination or power loss can prevent immediate cleanup, so the next Awake CLI/app invocation performs recovery. This mechanism does not guarantee recovery before the user logs in.
+
+Review `scripts/setup-sudoers.sh` before granting administrator access. To revoke the rule, inspect it, remove the known Awake rule files, and validate the remaining sudoers configuration:
+
+```sh
+sudo visudo -c
+sudo rm -f /etc/sudoers.d/awake /etc/sudoers.d/mac-awake
+sudo visudo -c
+```
+
+`make uninstall` performs the same revocation when one of these files exists. Do not remove an unrelated sudoers file with a different name unless you have confirmed it belongs to Awake.
