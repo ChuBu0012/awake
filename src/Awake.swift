@@ -1,443 +1,170 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
-// MARK: - Awake Menu Bar Application
-// Lightweight Native macOS Menu Bar utility for keeping Mac awake.
+private struct AwakeStatus: Decodable {
+    struct Lease: Decodable {
+        let id: String
+        let source: String
+        let reason: String
+        let expiresAt: Date?
+        enum CodingKeys: String, CodingKey { case id, source, reason; case expiresAt = "expires_at" }
+    }
+    struct Rule: Decodable {
+        let id: String
+        let name: String
+        let kind: String
+        let enabled: Bool
+    }
+    let active: Bool
+    let batterySuppressed: Bool
+    let batteryGuardEnabled: Bool
+    let lidSupportEnabled: Bool
+    let snoozedUntil: Date?
+    let requests: [Lease]
+    let rules: [Rule]
+    let recoveryPending: Bool
+    enum CodingKeys: String, CodingKey {
+        case active, requests, rules
+        case batterySuppressed = "battery_suppressed"
+        case batteryGuardEnabled = "battery_guard_enabled"
+        case lidSupportEnabled = "lid_support_enabled"
+        case snoozedUntil = "snoozed_until"
+        case recoveryPending = "recovery_pending"
+    }
+}
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
-    private var isAwakeActive: Bool = false
-    private var currentDurationSec: Int = 0
-    private var expiresAt: Date?
-    private var batteryGuardEnabled: Bool = true
+    private var busy = false
     private var lastCommandSucceeded = false
-    
-    // Cached dynamic Menu Bar Icons
-    private var awakeIcon: NSImage!
-    private var asleepIcon: NSImage!
-    
-    // Lazily resolve and secure the shared CLI/app state directory once.
-    private lazy var stateDir: URL = {
-        let fileManager = FileManager.default
-        let home = fileManager.homeDirectoryForCurrentUser
-        let configuredPath = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
-        let configHome: URL
-        if let configuredPath, configuredPath.hasPrefix("/") {
-            configHome = URL(fileURLWithPath: configuredPath, isDirectory: true)
-        } else {
-            configHome = home.appendingPathComponent(".config", isDirectory: true)
-        }
-        let directory = configHome.appendingPathComponent("awake", isDirectory: true)
-        do {
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            let attributes = try fileManager.attributesOfItem(atPath: directory.path)
-            if attributes[.type] as? FileAttributeType == .typeSymbolicLink {
-                NSLog("Awake state directory must not be a symbolic link: %@", directory.path)
-                return directory
-            }
-            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-        } catch {
-            NSLog("Awake could not secure its state directory: %@", error.localizedDescription)
-        }
-        return directory
-    }()
-    private var stateFile: URL { stateDir.appendingPathComponent("state.json") }
-    private var pidFile: URL { stateDir.appendingPathComponent("caffeinate.pid") }
-    
-    // UI Menu Items
-    private var statusMenuItem: NSMenuItem!
-    private var remainingMenuItem: NSMenuItem!
-    private var toggleMenuItem: NSMenuItem!
+    private var status: AwakeStatus?
+    private var currentDuration = 0
+    private var statusItemTitle: NSMenuItem!
+    private var detailItem: NSMenuItem!
+    private var toggleItem: NSMenuItem!
+    private var batteryItem: NSMenuItem!
+    private var automationMenu: NSMenu!
     private var durationMenu: NSMenu!
-    private var batteryGuardMenuItem: NSMenuItem!
-    
+    private let workQueue = DispatchQueue(label: "app.awake.cli", qos: .utility)
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
-        _ = stateDir
-        
-        generateMenuBarIcons()
-        setupStatusItem()
-        updateStateFromSystem()
-        
-        // Start background polling loop (every 5 seconds)
-        timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            self?.checkPeriodicStatus()
-        }
+        buildMenu()
+        refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
     }
-    
+
     func applicationWillTerminate(_ notification: Notification) {
-        // Safe exit: ensure sleep is restored when user quits the app
-        if isAwakeActive {
-            setAwakeState(active: false)
-        }
+        _ = runCLI(["session-end"])
     }
-    
-    // MARK: - Menu Bar Icons Generation (Stickman Mascot)
-    private func generateMenuBarIcons() {
-        awakeIcon = createStickmanIcon(awake: true)
-        asleepIcon = createStickmanIcon(awake: false)
-    }
-    
-    private func createStickmanIcon(awake: Bool) -> NSImage {
-        let size = NSSize(width: 18, height: 18)
-        let img = NSImage(size: size, flipped: false) { rect in
-            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
-            
-            ctx.setLineCap(.round)
-            ctx.setLineJoin(.round)
-            
-            let strokeColor = NSColor.black.cgColor
-            ctx.setStrokeColor(strokeColor)
-            
-            // 1. Head (circle)
-            let center = CGPoint(x: 9.0, y: 8.5)
-            let headRadius: CGFloat = 6.8
-            let headRect = CGRect(x: center.x - headRadius, y: center.y - headRadius, width: headRadius * 2, height: headRadius * 2)
-            
-            ctx.setFillColor(NSColor.clear.cgColor)
-            ctx.setLineWidth(1.3)
-            ctx.strokeEllipse(in: headRect)
-            
-            if awake {
-                // ACTIVE: Wide-eyed, tired eye bags
-                // Left Eye
-                let leftEyeCenter = CGPoint(x: 6.8, y: 9.5)
-                let rightEyeCenter = CGPoint(x: 11.2, y: 9.5)
-                let eyeR: CGFloat = 1.6
-                
-                ctx.setLineWidth(1.0)
-                ctx.strokeEllipse(in: CGRect(x: leftEyeCenter.x - eyeR, y: leftEyeCenter.y - eyeR, width: eyeR * 2, height: eyeR * 2))
-                ctx.strokeEllipse(in: CGRect(x: rightEyeCenter.x - eyeR, y: rightEyeCenter.y - eyeR, width: eyeR * 2, height: eyeR * 2))
-                
-                // Pupils (pinpoint staring)
-                let pupilR: CGFloat = 0.65
-                ctx.setFillColor(strokeColor)
-                ctx.fillEllipse(in: CGRect(x: leftEyeCenter.x - pupilR, y: leftEyeCenter.y - pupilR, width: pupilR * 2, height: pupilR * 2))
-                ctx.fillEllipse(in: CGRect(x: rightEyeCenter.x - pupilR, y: rightEyeCenter.y - pupilR, width: pupilR * 2, height: pupilR * 2))
-                
-                // Under-eye bags (tired lines)
-                ctx.setLineWidth(0.7)
-                ctx.move(to: CGPoint(x: 5.2, y: 7.2))
-                ctx.addQuadCurve(to: CGPoint(x: 8.2, y: 7.2), control: CGPoint(x: 6.7, y: 6.2))
-                ctx.strokePath()
-                
-                ctx.move(to: CGPoint(x: 9.8, y: 7.2))
-                ctx.addQuadCurve(to: CGPoint(x: 12.8, y: 7.2), control: CGPoint(x: 11.3, y: 6.2))
-                ctx.strokePath()
-                
-                // Mouth (straight, tense line)
-                ctx.setLineWidth(1.0)
-                ctx.move(to: CGPoint(x: 7.6, y: 4.8))
-                ctx.addLine(to: CGPoint(x: 10.4, y: 4.8))
-                ctx.strokePath()
-            } else {
-                // INACTIVE: Peacefully sleeping (-_-)
-                ctx.setLineWidth(1.1)
-                
-                // Left eye (closed arc)
-                ctx.move(to: CGPoint(x: 5.4, y: 9.0))
-                ctx.addQuadCurve(to: CGPoint(x: 8.0, y: 9.0), control: CGPoint(x: 6.7, y: 8.0))
-                ctx.strokePath()
-                
-                // Right eye (closed arc)
-                ctx.move(to: CGPoint(x: 10.0, y: 9.0))
-                ctx.addQuadCurve(to: CGPoint(x: 12.6, y: 9.0), control: CGPoint(x: 11.3, y: 8.0))
-                ctx.strokePath()
-                
-                // Mouth (gentle smile)
-                ctx.move(to: CGPoint(x: 7.8, y: 5.4))
-                ctx.addQuadCurve(to: CGPoint(x: 10.2, y: 5.4), control: CGPoint(x: 9.0, y: 4.6))
-                ctx.strokePath()
-                
-                // Tiny floating 'z' near top-right
-                ctx.setLineWidth(0.8)
-                ctx.move(to: CGPoint(x: 14.0, y: 16.0))
-                ctx.addLine(to: CGPoint(x: 16.5, y: 16.0))
-                ctx.addLine(to: CGPoint(x: 14.0, y: 13.5))
-                ctx.addLine(to: CGPoint(x: 16.5, y: 13.5))
-                ctx.strokePath()
-            }
-            
-            return true
-        }
-        img.isTemplate = true // Auto adapts to macOS Light/Dark Menu Bar
-        return img
-    }
-    
-    // MARK: - Status Bar Setup
-    private func setupStatusItem() {
+
+    private func buildMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        updateStatusIcon()
-        
+        statusItem.button?.image = NSImage(systemSymbolName: "moon.zzz", accessibilityDescription: "Awake")
         let menu = NSMenu()
-        
-        // 1. Status Indicator
-        statusMenuItem = NSMenuItem(title: "Status: Inactive", action: nil, keyEquivalent: "")
-        statusMenuItem.isEnabled = false
-        menu.addItem(statusMenuItem)
-        
-        remainingMenuItem = NSMenuItem(title: "Duration: Standard Sleep", action: nil, keyEquivalent: "")
-        remainingMenuItem.isEnabled = false
-        menu.addItem(remainingMenuItem)
-        
-        menu.addItem(NSMenuItem.separator())
-        
-        // 2. Toggle Button
-        toggleMenuItem = NSMenuItem(title: "Turn On Awake", action: #selector(toggleAwake), keyEquivalent: "t")
-        toggleMenuItem.target = self
-        menu.addItem(toggleMenuItem)
-        
-        // 3. Duration Presets Submenu
-        let durationParent = NSMenuItem(title: "Duration Preset", action: nil, keyEquivalent: "")
+        statusItemTitle = NSMenuItem(title: "Awake", action: nil, keyEquivalent: "")
+        statusItemTitle.isEnabled = false
+        menu.addItem(statusItemTitle)
+        detailItem = NSMenuItem(title: "Loading status…", action: nil, keyEquivalent: "")
+        detailItem.isEnabled = false
+        menu.addItem(detailItem)
+        menu.addItem(.separator())
+        toggleItem = NSMenuItem(title: "Turn On Awake", action: #selector(toggleAwake), keyEquivalent: "t")
+        toggleItem.target = self
+        menu.addItem(toggleItem)
+
+        let durationParent = NSMenuItem(title: "Duration", action: nil, keyEquivalent: "")
         durationMenu = NSMenu()
-        
-        let presets: [(String, Int)] = [
-            ("Indefinite (Until stopped)", 0),
-            ("30 Minutes", 30 * 60),
-            ("1 Hour", 60 * 60),
-            ("2 Hours", 2 * 60 * 60),
-            ("4 Hours", 4 * 60 * 60),
-            ("8 Hours", 8 * 60 * 60)
-        ]
-        
-        for (title, sec) in presets {
+        for (title, seconds) in [("Until stopped", 0), ("30 minutes", 1800), ("1 hour", 3600), ("2 hours", 7200), ("4 hours", 14400), ("8 hours", 28800)] {
             let item = NSMenuItem(title: title, action: #selector(selectDuration(_:)), keyEquivalent: "")
             item.target = self
-            item.tag = sec
+            item.tag = seconds
             durationMenu.addItem(item)
         }
         durationParent.submenu = durationMenu
         menu.addItem(durationParent)
-        
-        menu.addItem(NSMenuItem.separator())
-        
-        // 4. Battery Guard
-        batteryGuardMenuItem = NSMenuItem(title: "Battery Guard (Auto-off < 20%)", action: #selector(toggleBatteryGuard), keyEquivalent: "")
-        batteryGuardMenuItem.target = self
-        batteryGuardMenuItem.state = batteryGuardEnabled ? .on : .off
-        menu.addItem(batteryGuardMenuItem)
-        
-        menu.addItem(NSMenuItem.separator())
-        
-        // 5. Quit
-        let quitItem = NSMenuItem(title: "Quit Awake", action: #selector(quitApp), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-        
+        menu.addItem(.separator())
+
+        let automationParent = NSMenuItem(title: "Automations", action: nil, keyEquivalent: "")
+        automationMenu = NSMenu()
+        let addApp = NSMenuItem(title: "Keep Awake while an app is open…", action: #selector(addAppRule), keyEquivalent: "")
+        addApp.target = self
+        automationMenu.addItem(addApp)
+        let addProcess = NSMenuItem(title: "Keep Awake while a work process runs…", action: #selector(addProcessRule), keyEquivalent: "")
+        addProcess.target = self
+        automationMenu.addItem(addProcess)
+        let addSchedule = NSMenuItem(title: "Add a schedule…", action: #selector(addScheduleRule), keyEquivalent: "")
+        addSchedule.target = self
+        automationMenu.addItem(addSchedule)
+        automationMenu.addItem(.separator())
+        automationParent.submenu = automationMenu
+        menu.addItem(automationParent)
+
+        batteryItem = NSMenuItem(title: "Battery Guard", action: #selector(toggleBatteryGuard), keyEquivalent: "")
+        batteryItem.target = self
+        menu.addItem(batteryItem)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "Quit Awake", action: #selector(quitApp), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
         statusItem.menu = menu
-        updateDurationMenuChecks()
     }
-    
-    // MARK: - UI Updates
-    private func updateStatusIcon() {
-        guard let button = statusItem?.button else { return }
-        button.image = isAwakeActive ? awakeIcon : asleepIcon
-        button.title = ""
-    }
-    
-    private func updateMenuUI() {
-        if isAwakeActive {
-            statusMenuItem.title = "Status: ACTIVE (Won't Sleep)"
-            toggleMenuItem.title = "Turn Off Awake"
-            
-            if let exp = expiresAt {
-                let remaining = Int(exp.timeIntervalSinceNow)
-                if remaining > 0 {
-                    let h = remaining / 3600
-                    let m = (remaining % 3600) / 60
-                    let s = remaining % 60
-                    if h > 0 {
-                        remainingMenuItem.title = "Remaining: \(h)h \(m)m"
-                    } else if m > 0 {
-                        remainingMenuItem.title = "Remaining: \(m)m \(s)s"
-                    } else {
-                        remainingMenuItem.title = "Remaining: \(s)s"
+
+    private func refresh() {
+        guard !busy else { return }
+        busy = true
+        let bundles = NSWorkspace.shared.runningApplications.compactMap { $0.bundleIdentifier }.filter { !$0.isEmpty }
+        var args = ["tick", "--automation-owner-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
+        for bundle in Set(bundles) { args += ["--bundle-id", bundle] }
+        workQueue.async { [weak self] in
+            guard let self else { return }
+            _ = self.runCLI(args)
+            let output = self.runCLI(["status", "--json"])
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let decoded = output.data(using: .utf8).flatMap { try? decoder.decode(AwakeStatus.self, from: $0) }
+            DispatchQueue.main.async {
+                self.busy = false
+                if let decoded {
+                    self.status = decoded
+                    if let lease = decoded.requests.first(where: { $0.source == "manual" }), let expires = lease.expiresAt {
+                        self.currentDuration = max(0, Int(expires.timeIntervalSinceNow))
+                    } else if decoded.requests.contains(where: { $0.source == "manual" }) {
+                        self.currentDuration = 0
                     }
+                    self.renderStatus()
                 } else {
-                    remainingMenuItem.title = "Timer Expired"
-                }
-            } else {
-                remainingMenuItem.title = "Duration: Indefinite"
-            }
-        } else {
-            statusMenuItem.title = "Status: Inactive (Normal Sleep)"
-            toggleMenuItem.title = "Turn On Awake"
-            remainingMenuItem.title = "Duration: Not Running"
-        }
-        
-        updateStatusIcon()
-        updateDurationMenuChecks()
-    }
-    
-    private func updateDurationMenuChecks() {
-        for item in durationMenu.items {
-            item.state = (item.tag == currentDurationSec) ? .on : .off
-        }
-    }
-    
-    // MARK: - Actions
-    @objc private func toggleAwake() {
-        setAwakeState(active: !isAwakeActive, durationSec: currentDurationSec)
-    }
-    
-    @objc private func selectDuration(_ sender: NSMenuItem) {
-        currentDurationSec = sender.tag
-        if isAwakeActive {
-            setAwakeState(active: true, durationSec: currentDurationSec)
-        } else {
-            updateDurationMenuChecks()
-        }
-    }
-    
-    @objc private func toggleBatteryGuard() {
-        batteryGuardEnabled.toggle()
-        batteryGuardMenuItem.state = batteryGuardEnabled ? .on : .off
-    }
-    
-    @objc private func quitApp() {
-        if isAwakeActive {
-            setAwakeState(active: false)
-        }
-        NSApplication.shared.terminate(nil)
-    }
-    
-    // MARK: - State Management & System Calls
-    private func setAwakeState(active: Bool, durationSec: Int = 0) {
-        let cliPath = findAwakeCLI()
-        
-        if active {
-            // Battery guard pre-check
-            if batteryGuardEnabled {
-                let (isAC, percent) = getBatteryInfo()
-                if !isAC && percent <= 20 {
-                    sendNotification(title: "Awake Blocked", body: "Battery is at \(percent)% on battery power. Awake mode blocked to protect your Mac.")
-                    return
+                    self.detailItem.title = "Status unavailable — check Awake installation"
                 }
             }
-            
-            var args = ["on"]
-            if durationSec > 0 {
-                args.append("\(durationSec)s")
-            } else {
-                args.append("indefinite")
-            }
-            
-            _ = runCommand(cliPath, arguments: args)
-            guard lastCommandSucceeded else {
-                sendNotification(title: "Awake Failed", body: "Could not enable sleep prevention. Check permissions and try again.")
-                updateStateFromSystem()
-                return
-            }
-            isAwakeActive = true
-            currentDurationSec = durationSec
-            expiresAt = durationSec > 0 ? Date().addingTimeInterval(TimeInterval(durationSec)) : nil
-            sendNotification(title: "Awake Activated", body: durationSec > 0 ? "Awake mode set for \(durationSec / 60) mins." : "Awake mode set indefinitely.")
+        }
+    }
+
+    private func renderStatus() {
+        guard let status else { return }
+        if status.batterySuppressed {
+            statusItemTitle.title = "Awake is paused by Battery Guard"
         } else {
-            _ = runCommand(cliPath, arguments: ["off"])
-            guard lastCommandSucceeded else {
-                sendNotification(title: "Awake Failed", body: "Could not restore the sleep setting. Check permissions and try again.")
-                updateStateFromSystem()
-                return
-            }
-            isAwakeActive = false
-            expiresAt = nil
-            sendNotification(title: "Awake Deactivated", body: "Standard macOS sleep behavior restored.")
+            statusItemTitle.title = status.active ? "Awake is preventing sleep" : "Awake is inactive"
         }
-        
-        updateMenuUI()
+        let reasons = status.requests.map(\.reason).filter { !$0.isEmpty }
+        detailItem.title = reasons.isEmpty ? "No active requests" : reasons.joined(separator: ", ")
+        toggleItem.title = status.requests.contains(where: { $0.source == "manual" }) ? "Turn Off Awake (snooze automations)" : "Turn On Awake"
+        batteryItem.state = status.batteryGuardEnabled ? .on : .off
+        statusItem.button?.image = NSImage(systemSymbolName: status.active ? "eye" : "moon.zzz", accessibilityDescription: status.active ? "Awake active" : "Awake inactive")
+        for item in durationMenu.items { item.state = item.tag == currentDuration ? .on : .off }
+        renderRules()
     }
-    
-    private func checkPeriodicStatus() {
-        // 1. Check if timer expired
-        if isAwakeActive, let exp = expiresAt {
-            if Date() >= exp {
-                sendNotification(title: "Awake Timer Expired", body: "Scheduled duration reached. Restoring normal sleep.")
-                setAwakeState(active: false)
-                return
-            }
-        }
-        
-        // 2. Battery Guard check
-        if isAwakeActive && batteryGuardEnabled {
-            let (isAC, percent) = getBatteryInfo()
-            if !isAC && percent <= 20 {
-                sendNotification(title: "Awake Auto-Disabled", body: "Battery dropped to \(percent)%. Sleep restored to prevent shutdown.")
-                setAwakeState(active: false)
-                return
-            }
-        }
-        
-        // 3. Sync external state (e.g. if toggled via CLI)
-        updateStateFromSystem()
-    }
-    
-    private func updateStateFromSystem() {
-        let pmsetOutput = runCommand("/usr/bin/pmset", arguments: ["-g"])
-        let sleepDisabled = pmsetOutput.contains("SleepDisabled\t1") || pmsetOutput.contains("SleepDisabled 1")
-        
-        if sleepDisabled != isAwakeActive {
-            isAwakeActive = sleepDisabled
-        }
-        
-        // Read JSON state if available
-        if let data = try? Data(contentsOf: stateFile),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let expTimestamp = json["expires_at"] as? Double, expTimestamp > 0 {
-                expiresAt = Date(timeIntervalSince1970: expTimestamp)
-            } else {
-                expiresAt = nil
-            }
-            if let dur = json["duration_seconds"] as? Int {
-                currentDurationSec = dur
-            }
-        }
-        
-        DispatchQueue.main.async { [weak self] in
-            self?.updateMenuUI()
-        }
-    }
-    
-    // MARK: - Utilities
-    private func findAwakeCLI() -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let possiblePaths = [
-            "\(home)/.local/bin/awake",
-            "/usr/local/bin/awake",
-            Bundle.main.bundlePath + "/Contents/Resources/awake"
-        ]
-        for path in possiblePaths {
-            if FileManager.default.fileExists(atPath: path) {
-                return path
-            }
-        }
-        return "awake" // fallback to PATH
-    }
-    
-    private func getBatteryInfo() -> (isAC: Bool, percent: Int) {
-        let output = runCommand("/usr/bin/pmset", arguments: ["-g", "batt"])
-        let isAC = output.contains("AC Power")
-        
-        var percent = 100
-        let regex = try? NSRegularExpression(pattern: "([0-9]{1,3})%")
-        if let match = regex?.firstMatch(in: output, range: NSRange(output.startIndex..., in: output)),
-           let range = Range(match.range(at: 1), in: output) {
-            percent = Int(output[range]) ?? 100
-        }
-        return (isAC, percent)
-    }
-    
-    @discardableResult
-    private func runCommand(_ launchPath: String, arguments: [String]) -> String {
-        lastCommandSucceeded = false
+
+    private func runCLI(_ arguments: [String]) -> String {
         let process = Process()
-        process.launchPath = launchPath.hasPrefix("/") ? launchPath : "/usr/bin/env"
-        process.arguments = launchPath.hasPrefix("/") ? arguments : [launchPath] + arguments
-        
         let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: findCLI())
+        process.arguments = arguments
         process.standardOutput = pipe
         process.standardError = pipe
-        
         do {
             try process.run()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
@@ -449,14 +176,143 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return ""
         }
     }
-    
-    private func sendNotification(title: String, body: String) {
-        let script = "display notification \"\(body)\" with title \"\(title)\""
-        _ = runCommand("/usr/bin/osascript", arguments: ["-e", script])
+
+    private func findCLI() -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = ["\(home)/.local/bin/awake", "/usr/local/bin/awake", "/opt/homebrew/bin/awake", Bundle.main.bundlePath + "/Contents/Resources/awake"]
+        return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) ?? "/usr/bin/false"
+    }
+
+    private func perform(_ arguments: [String]) {
+        workQueue.async { [weak self] in
+            guard let self else { return }
+            _ = self.runCLI(arguments)
+            let succeeded = self.lastCommandSucceeded
+            DispatchQueue.main.async {
+                if !succeeded { self.showError("Awake command failed. Check the installation and permissions.") }
+                self.refresh()
+            }
+        }
+    }
+
+    @objc private func toggleAwake() {
+        if status?.requests.contains(where: { $0.source == "manual" }) == true {
+            perform(["off"])
+        } else {
+            var args = ["on"]
+            if currentDuration > 0 { args.append("\(currentDuration)s") } else { args.append("indefinite") }
+            args += ["--owner-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
+            perform(args)
+        }
+    }
+
+    @objc private func selectDuration(_ sender: NSMenuItem) {
+        currentDuration = sender.tag
+        if status?.requests.contains(where: { $0.source == "manual" }) == true {
+            let duration = sender.tag > 0 ? "\(sender.tag)s" : "indefinite"
+            let args = ["on", duration, "--owner-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
+            perform(args)
+        } else { renderStatus() }
+    }
+
+    @objc private func toggleBatteryGuard() {
+        let enabled = status?.batteryGuardEnabled != true
+        perform(["set", "battery-guard", enabled ? "on" : "off"])
+    }
+
+    @objc private func addAppRule() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Watch App"
+        guard panel.runModal() == .OK, let url = panel.url,
+              let bundleID = Bundle(url: url)?.bundleIdentifier else {
+            if panel.url != nil { showError("This app does not have a bundle identifier.") }
+            return
+        }
+        let name = FileManager.default.displayName(atPath: url.path)
+        let id = "app-" + UUID().uuidString.lowercased()
+        perform(["rule", "app", id, name, bundleID])
+    }
+
+    @objc private func addProcessRule() {
+        guard let values = prompt(title: "Watch a work process", message: "Enter the exact process name (for example: node). This matches the process while it is running.", fields: ["Process name"]) else { return }
+        let name = values[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { showError("Enter a process name."); return }
+        perform(["rule", "process", "process-\(UUID().uuidString.lowercased())", name, name])
+    }
+
+    @objc private func addScheduleRule() {
+        guard let values = prompt(title: "Add a schedule", message: "Enter weekdays and 24-hour times. Example: mon,tue,wed,thu,fri 22:00 02:00. Overnight schedules use the day they start.", fields: ["Days start end"]) else { return }
+        let parts = values[0].split(whereSeparator: \.isWhitespace).map(String.init)
+        guard parts.count == 3 else { showError("Use: mon,tue,wed,thu,fri 22:00 02:00"); return }
+        perform(["rule", "schedule", "schedule-\(UUID().uuidString.lowercased())", "Schedule (\(parts[0]))", parts[0], parts[1], parts[2]])
+    }
+
+    private func prompt(title: String, message: String, fields: [String]) -> [String]? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 8
+        var inputs: [NSTextField] = []
+        for placeholder in fields {
+            let field = NSTextField(string: "")
+            field.placeholderString = placeholder
+            inputs.append(field)
+            stack.addArrangedSubview(field)
+        }
+        alert.accessoryView = stack
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return inputs.map(\.stringValue)
+    }
+
+    private func renderRules() {
+        guard let status else { return }
+        while automationMenu.numberOfItems > 4 { automationMenu.removeItem(at: 4) }
+        guard !status.rules.isEmpty else {
+            let empty = NSMenuItem(title: "No automations yet", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            automationMenu.addItem(empty)
+            return
+        }
+        for rule in status.rules {
+            let parent = NSMenuItem(title: "\(rule.enabled ? "✓" : "○") \(rule.name)", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            let toggle = NSMenuItem(title: rule.enabled ? "Pause" : "Enable", action: #selector(ruleAction(_:)), keyEquivalent: "")
+            toggle.target = self
+            toggle.representedObject = [rule.id, rule.enabled ? "disable" : "enable"]
+            submenu.addItem(toggle)
+            let remove = NSMenuItem(title: "Remove", action: #selector(ruleAction(_:)), keyEquivalent: "")
+            remove.target = self
+            remove.representedObject = [rule.id, "remove"]
+            submenu.addItem(remove)
+            parent.submenu = submenu
+            automationMenu.addItem(parent)
+        }
+    }
+
+    @objc private func ruleAction(_ sender: NSMenuItem) {
+        guard let values = sender.representedObject as? [String], values.count == 2 else { return }
+        perform(["rule", values[1], values[0]])
+    }
+
+    @objc private func quitApp() { NSApplication.shared.terminate(nil) }
+
+    private func showError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Awake"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 }
 
-// MARK: - Entry Point
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
