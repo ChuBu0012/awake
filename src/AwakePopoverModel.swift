@@ -145,60 +145,6 @@ final class AwakePopoverModel: ObservableObject {
         _ = runCLI(["session-end"])
     }
 
-    func addRulesBatch(
-        apps: [(name: String, bundleID: String?, process: String?, isProcess: Bool)],
-        schedule: (days: String, start: String, end: String)?,
-        enableLidSupport: Bool = false,
-        completion: @escaping () -> Void
-    ) {
-        isBusy = true
-        errorMessage = nil
-
-        workQueue.async { [weak self] in
-            guard let self else { return }
-            for app in apps {
-                if app.isProcess, let rawProc = app.process {
-                    var proc = rawProc.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if proc.contains("/") {
-                        proc = URL(fileURLWithPath: proc).lastPathComponent
-                    }
-                    if !proc.isEmpty {
-                        let id = "process-\(UUID().uuidString.lowercased())"
-                        var cmd = ["rule", "process", id, app.name, proc]
-                        if let bID = app.bundleID, !bID.isEmpty {
-                            cmd.append(bID)
-                        }
-                        _ = self.runCLI(cmd)
-                    }
-                } else if let bID = app.bundleID, !bID.isEmpty {
-                    let id = "app-\(UUID().uuidString.lowercased())"
-                    _ = self.runCLI(["rule", "app", id, app.name, bID])
-                }
-            }
-            if let sched = schedule, !sched.days.isEmpty {
-                let id = "schedule-\(UUID().uuidString.lowercased())"
-                let cleanDays = sched.days.trimmingCharacters(in: .whitespacesAndNewlines)
-                _ = self.runCLI(["rule", "schedule", id, "Schedule (\(cleanDays))", cleanDays, sched.start, sched.end])
-            }
-            if enableLidSupport {
-                _ = self.runCLI(["set", "lid-support", "on"])
-            }
-
-            let result = self.runCLI(["status", "--json"])
-            let decoded = result.succeeded ? Self.decodeStatus(result.output) : nil
-
-            DispatchQueue.main.async {
-                self.isBusy = false
-                if let decoded {
-                    self.status = decoded
-                    self.updateRemainingDuration(from: decoded)
-                }
-                self.refresh()
-                completion()
-            }
-        }
-    }
-
     private func performAction(_ arguments: [String], completion: (() -> Void)? = nil) {
         isBusy = true
         errorMessage = nil

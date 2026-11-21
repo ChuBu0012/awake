@@ -15,7 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     // Windows
     private var settingsWindow: NSWindow?
-    private var getStartedWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -33,13 +32,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         }
         RunLoop.main.add(refreshTimer, forMode: .common)
         self.timer = refreshTimer
-
-        // First launch Get Started onboarding
-        if !UserDefaults.standard.bool(forKey: "hasCompletedGetStarted") {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.showGetStartedWindow(force: false)
-            }
-        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -56,7 +48,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Awake", action: #selector(openAbout), keyEquivalent: "")
-        appMenu.addItem(withTitle: "Get Started Guide…", action: #selector(openGetStarted), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",")
         appMenu.addItem(NSMenuItem.separator())
@@ -91,10 +82,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     @objc private func openPreferences() {
         showSettingsWindow()
-    }
-
-    @objc private func openGetStarted() {
-        showGetStartedWindow(force: true)
     }
 
     @objc private func openAbout() {
@@ -142,10 +129,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                 onOpenSettings: { [weak self] in
                     self?.popover.performClose(nil)
                     self?.showSettingsWindow()
-                },
-                onOpenGetStarted: { [weak self] in
-                    self?.popover.performClose(nil)
-                    self?.showGetStartedWindow(force: true)
                 },
                 onAddApp: { [weak self] in self?.addAppRule() },
                 onAddProcess: { [weak self] in self?.addProcessRule() },
@@ -240,10 +223,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
         let settingsView = AwakeSettingsView(
             model: model,
-            onRerunGetStarted: { [weak self] in
-                self?.settingsWindow?.close()
-                self?.showGetStartedWindow(force: true)
-            },
             onAddApp: { [weak self] in self?.addAppRule() },
             onAddProcess: { [weak self] in self?.addProcessRule() },
             onAddSchedule: { [weak self] in self?.addScheduleRule() }
@@ -267,52 +246,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
-    func showGetStartedWindow(force: Bool = false) {
-        if !force && UserDefaults.standard.bool(forKey: "hasCompletedGetStarted") {
-            return
-        }
-
-        if let window = getStartedWindow {
-            window.makeKeyAndOrderFront(nil)
-            window.orderFrontRegardless()
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            return
-        }
-
-        let getStartedView = AwakeGetStartedView(
-            model: model,
-            onFinish: { [weak self] in
-                self?.getStartedWindow?.close()
-                self?.getStartedWindow = nil
-                self?.model.refresh()
-            }
-        )
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 540, height: 500),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        window.center()
-        window.title = "Get Started with Awake"
-        window.contentView = NSHostingView(rootView: getStartedView)
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        getStartedWindow = window
-
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
-        NSApplication.shared.activate(ignoringOtherApps: true)
-    }
-
     // NSWindowDelegate
     func windowWillClose(_ notification: Notification) {
         guard let closedWindow = notification.object as? NSWindow else { return }
         if closedWindow === settingsWindow {
             settingsWindow = nil
-        } else if closedWindow === getStartedWindow {
-            getStartedWindow = nil
         }
     }
 

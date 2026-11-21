@@ -247,7 +247,6 @@ final class AwakeSettingsModel: ObservableObject {
 struct AwakeSettingsView: View {
     @ObservedObject var model: AwakePopoverModel
     @StateObject private var settingsState = AwakeSettingsModel()
-    let onRerunGetStarted: () -> Void
     let onAddApp: () -> Void
     let onAddProcess: () -> Void
     let onAddSchedule: () -> Void
@@ -419,27 +418,6 @@ struct AwakeSettingsView: View {
                 .padding(12)
                 .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
             }
-
-            // Section 4: Setup Assistant
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Setup Assistant")
-                    .font(.headline)
-
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Rerun Get Started Wizard")
-                            .font(.body.weight(.medium))
-                        Text("Re-discover local developer apps and reconfigure goals")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    Button("Open Wizard…", action: onRerunGetStarted)
-                        .buttonStyle(.bordered)
-                }
-                .padding(12)
-                .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
-            }
         }
     }
 
@@ -519,7 +497,7 @@ struct AwakeSettingsView: View {
                     Text("No automations configured yet.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    Text("Click 'Add Rule' above or rerun the Get Started wizard to add rules.")
+                    Text("Click 'Add Rule' above to configure automations.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -855,5 +833,16 @@ struct AwakeSettingsView: View {
         default:
             return isActive ? "Active" : "Inactive"
         }
+    }
+}
+
+// MARK: - Utilities
+struct AppKitUtils {
+    static func appIcon() -> NSImage {
+        if let icon = NSImage(named: NSImage.applicationIconName) {
+            return icon
+        }
+        let fallback = Bundle.main.url(forResource: "AppIcon", withExtension: "icns").flatMap { NSImage(contentsOf: $0) }
+        return fallback ?? NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: "Awake")!
     }
 }

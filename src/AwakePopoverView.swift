@@ -4,7 +4,6 @@ import SwiftUI
 struct AwakePopoverView: View {
     @ObservedObject var model: AwakePopoverModel
     let onOpenSettings: () -> Void
-    let onOpenGetStarted: () -> Void
     let onAddApp: () -> Void
     let onAddProcess: () -> Void
     let onAddSchedule: () -> Void
@@ -555,14 +554,6 @@ struct AwakePopoverView: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut(",", modifiers: .command)
-
-            Spacer()
-
-            Button(action: onOpenGetStarted) {
-                Label("Get Started…", systemImage: "sparkles")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(.plain)
 
             Spacer()
 
