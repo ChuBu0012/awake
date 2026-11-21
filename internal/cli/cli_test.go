@@ -131,9 +131,10 @@ func TestStatusJSONUsesEmptyArraysForNoRequestsOrRules(t *testing.T) {
 }
 
 type fakeAdapter struct {
-	running map[string]domain.ProcessID
-	now     time.Time
-	nextPID int
+	running       map[string]domain.ProcessID
+	now           time.Time
+	nextPID       int
+	sleepDisabled bool
 }
 
 func (f *fakeAdapter) ReadPower(context.Context) (domain.PowerState, error) {
@@ -176,8 +177,14 @@ func (f *fakeAdapter) StopAssertion(id domain.ProcessID) error {
 	return nil
 }
 
-func (f *fakeAdapter) ReadSleepDisabled(context.Context) (bool, error) { return false, nil }
-func (f *fakeAdapter) SetSleepDisabled(context.Context, bool) error    { return nil }
+func (f *fakeAdapter) ReadSleepDisabled(context.Context) (bool, error) {
+	return f.sleepDisabled, nil
+}
+
+func (f *fakeAdapter) SetSleepDisabled(_ context.Context, disabled bool) error {
+	f.sleepDisabled = disabled
+	return nil
+}
 
 type fakeCommandRunner struct {
 	args     []string

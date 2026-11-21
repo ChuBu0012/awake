@@ -430,7 +430,7 @@ func statusFrom(state domain.State, evaluation domain.Evaluation) Status {
 		SnoozedUntil:      snoozedUntil,
 		Requests:          append([]domain.Lease{}, evaluation.Requests...),
 		Rules:             rules,
-		RecoveryPending:   state.SleepDisabledBaseline != nil || state.LegacyAssertionPID != nil,
+		RecoveryPending:   (state.SleepDisabledBaseline != nil && !evaluation.Effective) || state.LegacyAssertionPID != nil || state.RecoveryWarning != "",
 		RecoveryWarning:   state.RecoveryWarning,
 	}
 }

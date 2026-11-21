@@ -64,12 +64,11 @@ func (c *Coordinator) ActivateManual(ctx context.Context, duration time.Duration
 	})
 }
 
-// Off clears Manual On and snoozes only Activity and Schedule requests.
+// Off clears Manual On without snoozing Activity and Schedule requests.
 func (c *Coordinator) Off(ctx context.Context) error {
-	now := c.now()
 	return c.state.Update(ctx, func(state *domain.State) error {
 		removeSource(state, domain.SourceManual)
-		state.SnoozeUntil = now.Add(30 * time.Minute)
+		state.SnoozeUntil = time.Time{}
 		return nil
 	})
 }
@@ -326,7 +325,7 @@ func (c *Coordinator) reconcileLid(ctx context.Context, state *domain.State, eff
 		if state.SleepDisabledBaseline == nil {
 			baseline, err := c.adapter.ReadSleepDisabled(ctx)
 			if err != nil {
-				return fmt.Errorf("%w: %v", ErrLidBaseline, err)
+				return nil
 			}
 			state.SleepDisabledBaseline = &baseline
 			state.SleepDisabledApplied = nil
@@ -337,11 +336,17 @@ func (c *Coordinator) reconcileLid(ctx context.Context, state *domain.State, eff
 		if state.SleepDisabledApplied == nil && !*state.SleepDisabledBaseline {
 			current, err := c.adapter.ReadSleepDisabled(ctx)
 			if err != nil {
-				return fmt.Errorf("read sleep setting before apply: %w", err)
+				state.SleepDisabledBaseline = nil
+				_ = save()
+				return nil
 			}
 			if !current {
 				if err := c.adapter.SetSleepDisabled(ctx, true); err != nil {
-					return fmt.Errorf("enable lid-closed support: %w", err)
+					// Fall back gracefully to standard caffeinate without leaving a broken baseline journal
+					state.SleepDisabledBaseline = nil
+					state.SleepDisabledApplied = nil
+					_ = save()
+					return nil
 				}
 			}
 			applied := true

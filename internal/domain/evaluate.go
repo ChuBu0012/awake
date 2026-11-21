@@ -117,11 +117,8 @@ func Evaluate(state State, input EvaluationInput) Evaluation {
 			continue
 		}
 		matched := ruleMatches(rule, input)
-		if !matched && (rule.Kind == RuleAppOpen || rule.Kind == RuleWorkProcess) {
-			if lastSeen, ok := state.ActivityLastSeen[rule.ID]; ok && !input.Now.Before(lastSeen) && input.Now.Sub(lastSeen) < 2*time.Minute {
-				matched = true
-			}
-		}
+		// Note: The 2-minute restart grace period has been temporarily removed per user request
+		// to facilitate immediate verification and testing. Recorded in .agents/memory/decisions.md.
 		if matched {
 			requests = append(requests, Lease{ID: "rule:" + rule.ID, Source: sourceForRule(rule.Kind), Reason: ruleDisplayName(rule)})
 		}

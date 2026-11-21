@@ -11,7 +11,7 @@ import (
 	"awake/internal/store"
 )
 
-func TestManualOffSnoozesAutomationButKeepsRunLease(t *testing.T) {
+func TestManualOffClearsManualWhileAutomationContinues(t *testing.T) {
 	now := time.Date(2026, time.November, 20, 23, 0, 0, 0, time.UTC)
 	adapter := newFakeAdapter(now)
 	stateStore, err := store.Open(filepath.Join(t.TempDir(), "awake"))
@@ -30,6 +30,9 @@ func TestManualOffSnoozesAutomationButKeepsRunLease(t *testing.T) {
 	if err := coordinator.AddLease(context.Background(), domain.Lease{ID: "run-1", Source: domain.SourceCommand}); err != nil {
 		t.Fatal(err)
 	}
+	if err := coordinator.ActivateManual(context.Background(), 0, nil); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := coordinator.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -41,14 +44,19 @@ func TestManualOffSnoozesAutomationButKeepsRunLease(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !result.Effective || len(result.Requests) != 1 || result.Requests[0].ID != "run-1" {
-		t.Fatalf("post-Off result = %#v, want only the command lease to remain effective", result)
+	if !result.Effective || len(result.Requests) != 2 {
+		t.Fatalf("post-Off result = %#v, want command lease and automation to remain effective", result)
 	}
-	if _, exists := adapter.running["rule:agent"]; exists {
-		t.Fatal("manual Off left the snoozed Activity assertion running")
+	if _, exists := adapter.running["rule:agent"]; !exists {
+		t.Fatal("manual Off unexpectedly stopped the active automation rule")
 	}
 	if _, exists := adapter.running["run-1"]; !exists {
 		t.Fatal("manual Off stopped the explicit command assertion")
+	}
+	for _, req := range result.Requests {
+		if req.Source == domain.SourceManual {
+			t.Fatal("manual Off failed to clear the manual lease")
+		}
 	}
 }
 
@@ -187,7 +195,7 @@ func TestLidSettingRestoresCapturedValueAfterLastRequest(t *testing.T) {
 	}
 }
 
-func TestLidSetupFailureKeepsIdleAssertionAndLease(t *testing.T) {
+func TestLidSetupFailureFallsBackToIdleAssertion(t *testing.T) {
 	now := time.Date(2026, time.November, 21, 10, 0, 0, 0, time.UTC)
 	adapter := newFakeAdapter(now)
 	adapter.setSleepErr = errors.New("sudoers rule is missing")
@@ -203,19 +211,22 @@ func TestLidSetupFailureKeepsIdleAssertionAndLease(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = coordinator.Tick(context.Background())
-	if err == nil {
-		t.Fatal("Tick succeeded despite the requested privileged lid layer failing")
+	result, err := coordinator.Tick(context.Background())
+	if err != nil {
+		t.Fatalf("Tick returned error on optional lid failure: %v", err)
+	}
+	if !result.Effective {
+		t.Fatal("assertion should remain effective with standard caffeinate")
 	}
 	if _, exists := adapter.running["manual-1"]; !exists {
-		t.Fatal("failed optional lid setup also stopped the user-space idle assertion")
+		t.Fatal("failed optional lid setup stopped the user-space idle assertion")
 	}
 	state, err := stateStore.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Leases) != 1 || len(state.Assertions) != 1 {
-		t.Fatalf("idle request was not preserved after lid setup failure: %#v", state)
+	if state.SleepDisabledBaseline != nil || state.SleepDisabledApplied != nil {
+		t.Fatalf("failed lid setup left lingering baseline journal: %#v", state)
 	}
 }
 

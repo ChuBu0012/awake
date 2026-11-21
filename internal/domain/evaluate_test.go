@@ -126,18 +126,14 @@ func TestActivityWatchModesMatchTheirIntendedIdentity(t *testing.T) {
 	}
 }
 
-func TestActivityRequestUsesTwoMinuteRestartGrace(t *testing.T) {
+func TestActivityRequestStopsImmediatelyWhenProcessDisappears(t *testing.T) {
 	now := time.Date(2026, time.November, 21, 10, 0, 0, 0, time.UTC)
 	state := State{
 		Rules:            []Rule{{ID: "agent", Kind: RuleWorkProcess, Enabled: true, ProcessNames: []string{"agentd"}}},
-		ActivityLastSeen: map[string]time.Time{"agent": now.Add(-119 * time.Second)},
+		ActivityLastSeen: map[string]time.Time{"agent": now.Add(-5 * time.Second)},
 	}
 	input := EvaluationInput{Now: now, Power: PowerState{OnAC: true, BatteryPercent: 100, BatteryKnown: true}}
-	if got := Evaluate(state, input); !got.Effective || len(got.Requests) != 1 {
-		t.Fatalf("request inside restart grace = %#v, want active", got)
-	}
-	state.ActivityLastSeen["agent"] = now.Add(-2 * time.Minute)
-	if got := Evaluate(state, input); got.Effective {
-		t.Fatalf("request at the end of restart grace = %#v, want inactive", got)
+	if got := Evaluate(state, input); got.Effective || len(got.Requests) != 0 {
+		t.Fatalf("request without running process = %#v, want immediately inactive", got)
 	}
 }

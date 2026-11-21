@@ -266,7 +266,11 @@ func migrateLegacyState(data []byte) (domain.State, error) {
 }
 
 func defaultState() domain.State {
-	return domain.State{SchemaVersion: domain.CurrentSchemaVersion, BatteryGuardEnabled: true}
+	return domain.State{
+		SchemaVersion:       domain.CurrentSchemaVersion,
+		BatteryGuardEnabled: true,
+		LidSupportEnabled:   true,
+	}
 }
 
 func validate(state domain.State) error {
