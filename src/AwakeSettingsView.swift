@@ -467,18 +467,30 @@ struct AwakeSettingsView: View {
             if let rules = model.status?.rules, !rules.isEmpty {
                 VStack(spacing: 8) {
                     ForEach(rules, id: \.id) { rule in
+                        let isAct = rule.active == true || model.status?.requests.contains(where: { $0.id == "rule:\(rule.id)" }) == true
+                        let appOpen = rule.appOpen == true || isSettingsAppOpen(for: rule)
+                        let statusCol = settingsRuleStatusColor(rule, isActive: isAct, isAppOpen: appOpen)
+
                         HStack(spacing: 12) {
                             Image(systemName: rule.kind == "schedule" ? "calendar" : rule.kind == "app_open" ? "app.badge.checkmark" : "terminal")
                                 .font(.title3)
-                                .foregroundColor(rule.enabled ? .accentColor : .secondary)
+                                .foregroundColor(isAct ? Color(red: 0.2, green: 0.78, blue: 0.35) : (rule.enabled ? .accentColor : .secondary))
                                 .frame(width: 24)
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(rule.name)
                                     .font(.body.weight(.medium))
-                                Text(rule.kind == "schedule" ? "Weekly Schedule" : rule.kind == "app_open" ? "App is open" : "Work process")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                                HStack(spacing: 6) {
+                                    Text(rule.kind == "schedule" ? "Weekly Schedule" : rule.kind == "app_open" ? "App is open" : "Work process")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Text("•")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary.opacity(0.4))
+                                    Text(settingsRuleStatusText(rule, isActive: isAct, isAppOpen: appOpen))
+                                        .font(.caption.weight(isAct ? .medium : .regular))
+                                        .foregroundColor(statusCol)
+                                }
                             }
                             Spacer()
 
@@ -777,6 +789,73 @@ struct AwakeSettingsView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func isSettingsAppOpen(for rule: AwakeStatus.Rule) -> Bool {
+        if rule.appOpen == true { return true }
+        let running = NSWorkspace.shared.runningApplications
+        if let bID = rule.bundleID, running.contains(where: { $0.bundleIdentifier == bID }) {
+            return true
+        }
+        let lower = rule.name.lowercased()
+        if lower.contains("visual studio code") || lower.contains("code") {
+            return running.contains(where: { $0.bundleIdentifier == "com.microsoft.VSCode" || $0.bundleIdentifier == "com.microsoft.VSCodeInsiders" })
+        }
+        if lower.contains("cursor") {
+            return running.contains(where: { $0.bundleIdentifier == "com.todesktop.230313mzl4w4u92" })
+        }
+        if lower.contains("claude") {
+            return running.contains(where: { $0.bundleIdentifier == "com.anthropic.claude-desktop" })
+        }
+        if lower.contains("chatgpt") {
+            return running.contains(where: { $0.bundleIdentifier == "com.openai.chat" })
+        }
+        if lower.contains("antigravity") {
+            return running.contains(where: { $0.bundleIdentifier == "com.google.antigravity" })
+        }
+        if lower.contains("xcode") {
+            return running.contains(where: { $0.bundleIdentifier == "com.apple.dt.Xcode" })
+        }
+        return false
+    }
+
+    private func settingsRuleStatusColor(_ rule: AwakeStatus.Rule, isActive: Bool, isAppOpen: Bool) -> Color {
+        guard rule.enabled else { return .secondary.opacity(0.6) }
+        if isActive {
+            return Color(red: 0.2, green: 0.78, blue: 0.35)
+        }
+        if rule.kind == "work_process" && isAppOpen {
+            return Color.orange
+        }
+        return .secondary.opacity(0.5)
+    }
+
+    private func settingsRuleStatusText(_ rule: AwakeStatus.Rule, isActive: Bool, isAppOpen: Bool) -> String {
+        guard rule.enabled else { return "Paused" }
+        switch rule.kind {
+        case "work_process":
+            if isActive {
+                return "● Agent / Task running"
+            } else if isAppOpen {
+                return "○ App open, idle"
+            } else {
+                return "○ App closed"
+            }
+        case "app_open":
+            if isActive {
+                return "● App is open"
+            } else {
+                return "○ App closed"
+            }
+        case "schedule":
+            if isActive {
+                return "● Schedule active"
+            } else {
+                return "○ Outside schedule"
+            }
+        default:
+            return isActive ? "● Active" : "○ Inactive"
         }
     }
 }

@@ -18,6 +18,25 @@ struct AwakeStatus: Decodable, Equatable {
         let name: String
         let kind: String
         let enabled: Bool
+        let bundleID: String?
+        let active: Bool?
+        let appOpen: Bool?
+
+        init(id: String, name: String, kind: String, enabled: Bool, bundleID: String? = nil, active: Bool? = nil, appOpen: Bool? = nil) {
+            self.id = id
+            self.name = name
+            self.kind = kind
+            self.enabled = enabled
+            self.bundleID = bundleID
+            self.active = active
+            self.appOpen = appOpen
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, kind, enabled, active
+            case bundleID = "bundle_id"
+            case appOpen = "app_open"
+        }
     }
 
     let active: Bool

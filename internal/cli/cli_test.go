@@ -300,3 +300,43 @@ func TestParseWeekdaysAndClockTime(t *testing.T) {
 		t.Fatal("expected error for invalid clock time, got nil")
 	}
 }
+
+func TestRuleProcessWithBundleIDAndStatusActiveAppOpen(t *testing.T) {
+	now := time.Date(2026, time.November, 21, 10, 0, 0, 0, time.UTC)
+	adapter := &fakeAdapter{running: make(map[string]domain.ProcessID), now: now}
+	stateStore, err := store.Open(filepath.Join(t.TempDir(), "awake"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := engine.New(stateStore, adapter, func() time.Time { return now })
+	runner := &fakeCommandRunner{exitCode: 0}
+	app := New(coordinator, adapter, runner, &bytes.Buffer{}, &bytes.Buffer{})
+
+	err = app.Run(context.Background(), []string{"rule", "process", "proc-1", "VS Code", "Code Helper", "com.microsoft.VSCode"})
+	if err != nil {
+		t.Fatalf("rule process with bundle_id failed: %v", err)
+	}
+	state, err := stateStore.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Rules) != 1 || state.Rules[0].BundleID != "com.microsoft.VSCode" {
+		t.Fatalf("unexpected rule: %+v", state.Rules)
+	}
+
+	state.LastObservedBundleIDs = []string{"com.microsoft.VSCode"}
+	evaluation := domain.Evaluation{
+		Effective: true,
+		Requests:  []domain.Lease{{ID: "rule:proc-1"}},
+	}
+	status := statusFrom(state, evaluation)
+	if len(status.Rules) != 1 {
+		t.Fatalf("expected 1 rule in status, got %d", len(status.Rules))
+	}
+	if !status.Rules[0].Active {
+		t.Error("expected rule.Active = true")
+	}
+	if !status.Rules[0].AppOpen {
+		t.Error("expected rule.AppOpen = true")
+	}
+}

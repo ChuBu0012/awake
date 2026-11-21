@@ -352,19 +352,31 @@ struct AwakePopoverView: View {
     }
 
     private func automationRow(_ rule: AwakeStatus.Rule) -> some View {
-        HStack(spacing: 8) {
+        let isAct = isRuleActive(rule)
+        let appOpen = isAppOpen(for: rule)
+        let statusCol = ruleStatusColor(rule, isActive: isAct, isAppOpen: appOpen)
+
+        return HStack(spacing: 8) {
             Image(systemName: ruleIcon(rule.kind))
                 .font(.system(size: 12))
-                .foregroundColor(rule.enabled ? .accentColor : .secondary)
+                .foregroundColor(isAct ? Color(red: 0.2, green: 0.78, blue: 0.35) : (rule.enabled ? .accentColor : .secondary))
                 .frame(width: 16)
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(rule.name)
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
-                Text(ruleKindDescription(rule.kind))
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
+                HStack(spacing: 5) {
+                    Text(ruleKindDescription(rule.kind))
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    Text("•")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary.opacity(0.4))
+                    Text(ruleStatusText(rule, isActive: isAct, isAppOpen: appOpen))
+                        .font(.system(size: 10, weight: isAct ? .medium : .regular))
+                        .foregroundColor(statusCol)
+                }
             }
 
             Spacer(minLength: 4)
@@ -399,6 +411,96 @@ struct AwakePopoverView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func isRuleActive(_ rule: AwakeStatus.Rule) -> Bool {
+        if rule.active == true { return true }
+        return model.status?.requests.contains(where: { $0.id == "rule:\(rule.id)" }) == true
+    }
+
+    private func isAppOpen(for rule: AwakeStatus.Rule) -> Bool {
+        if rule.appOpen == true { return true }
+        let running = NSWorkspace.shared.runningApplications
+        if let bID = rule.bundleID, running.contains(where: { $0.bundleIdentifier == bID }) {
+            return true
+        }
+        let lower = rule.name.lowercased()
+        if lower.contains("visual studio code") || lower.contains("code") {
+            return running.contains(where: { $0.bundleIdentifier == "com.microsoft.VSCode" || $0.bundleIdentifier == "com.microsoft.VSCodeInsiders" })
+        }
+        if lower.contains("cursor") {
+            return running.contains(where: { $0.bundleIdentifier == "com.todesktop.230313mzl4w4u92" })
+        }
+        if lower.contains("claude") {
+            return running.contains(where: { $0.bundleIdentifier == "com.anthropic.claude-desktop" })
+        }
+        if lower.contains("chatgpt") {
+            return running.contains(where: { $0.bundleIdentifier == "com.openai.chat" })
+        }
+        if lower.contains("antigravity") {
+            return running.contains(where: { $0.bundleIdentifier == "com.google.antigravity" })
+        }
+        if lower.contains("xcode") {
+            return running.contains(where: { $0.bundleIdentifier == "com.apple.dt.Xcode" })
+        }
+        if lower.contains("iterm") {
+            return running.contains(where: { $0.bundleIdentifier == "com.googlecode.iterm2" })
+        }
+        if lower.contains("terminal") {
+            return running.contains(where: { $0.bundleIdentifier == "com.apple.Terminal" })
+        }
+        if lower.contains("ghostty") {
+            return running.contains(where: { $0.bundleIdentifier == "com.mitchellh.ghostty" })
+        }
+        if lower.contains("warp") {
+            return running.contains(where: { $0.bundleIdentifier == "dev.warp.Warp-Stable" })
+        }
+        if lower.contains("docker") {
+            return running.contains(where: { $0.bundleIdentifier == "com.docker.docker" })
+        }
+        if lower.contains("orbstack") {
+            return running.contains(where: { $0.bundleIdentifier == "dev.kdrag0n.OrbStack" || $0.bundleIdentifier == "dev.kdrag0n.MacVirt" })
+        }
+        return false
+    }
+
+    private func ruleStatusColor(_ rule: AwakeStatus.Rule, isActive: Bool, isAppOpen: Bool) -> Color {
+        guard rule.enabled else { return .secondary.opacity(0.6) }
+        if isActive {
+            return Color(red: 0.2, green: 0.78, blue: 0.35)
+        }
+        if rule.kind == "work_process" && isAppOpen {
+            return Color.orange
+        }
+        return .secondary.opacity(0.5)
+    }
+
+    private func ruleStatusText(_ rule: AwakeStatus.Rule, isActive: Bool, isAppOpen: Bool) -> String {
+        guard rule.enabled else { return "Paused" }
+        switch rule.kind {
+        case "work_process":
+            if isActive {
+                return "● Agent / Task running"
+            } else if isAppOpen {
+                return "○ App open, idle"
+            } else {
+                return "○ App closed"
+            }
+        case "app_open":
+            if isActive {
+                return "● App is open"
+            } else {
+                return "○ App closed"
+            }
+        case "schedule":
+            if isActive {
+                return "● Schedule active"
+            } else {
+                return "○ Outside schedule"
+            }
+        default:
+            return isActive ? "● Active" : "○ Inactive"
+        }
     }
 
     private func ruleIcon(_ kind: String) -> String {

@@ -109,7 +109,7 @@ final class AwakePopoverModel: ObservableObject {
         performAction(["rule", "app", ruleID, name, bundleID])
     }
 
-    func addProcessRule(name: String, processName: String? = nil) {
+    func addProcessRule(name: String, processName: String? = nil, bundleID: String? = nil) {
         guard !isBusy else { return }
         var proc = (processName ?? name).trimmingCharacters(in: .whitespacesAndNewlines)
         if proc.contains("/") {
@@ -119,7 +119,11 @@ final class AwakePopoverModel: ObservableObject {
         let displayName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let ruleName = displayName.isEmpty ? proc : displayName
         let ruleID = "process-\(UUID().uuidString.lowercased())"
-        performAction(["rule", "process", ruleID, ruleName, proc])
+        var args = ["rule", "process", ruleID, ruleName, proc]
+        if let bID = bundleID, !bID.isEmpty {
+            args.append(bID)
+        }
+        performAction(args)
     }
 
     func addScheduleRule(days: String, start: String, end: String) {
@@ -160,7 +164,11 @@ final class AwakePopoverModel: ObservableObject {
                     }
                     if !proc.isEmpty {
                         let id = "process-\(UUID().uuidString.lowercased())"
-                        _ = self.runCLI(["rule", "process", id, app.name, proc])
+                        var cmd = ["rule", "process", id, app.name, proc]
+                        if let bID = app.bundleID, !bID.isEmpty {
+                            cmd.append(bID)
+                        }
+                        _ = self.runCLI(cmd)
                     }
                 } else if let bID = app.bundleID, !bID.isEmpty {
                     let id = "app-\(UUID().uuidString.lowercased())"

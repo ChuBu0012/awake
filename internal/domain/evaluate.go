@@ -45,6 +45,8 @@ type Rule struct {
 	Weekdays     []time.Weekday `json:"weekdays,omitempty"`
 	StartMinute  int            `json:"start_minute,omitempty"`
 	EndMinute    int            `json:"end_minute,omitempty"`
+	Active       bool           `json:"active,omitempty"`
+	AppOpen      bool           `json:"app_open,omitempty"`
 }
 
 type State struct {

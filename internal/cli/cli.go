@@ -355,10 +355,14 @@ func (c *CLI) rule(ctx context.Context, args []string) error {
 		}
 		return c.coordinator.SetRule(ctx, domain.Rule{ID: args[1], Name: args[2], Kind: domain.RuleAppOpen, BundleID: args[3], Enabled: true})
 	case "process":
-		if len(args) != 4 || !validProcessName(args[3]) {
-			return fmt.Errorf("usage: awake rule process ID NAME EXACT_PROCESS_NAME")
+		if (len(args) != 4 && len(args) != 5) || !validProcessName(args[3]) {
+			return fmt.Errorf("usage: awake rule process ID NAME EXACT_PROCESS_NAME [BUNDLE_ID]")
 		}
-		return c.coordinator.SetRule(ctx, domain.Rule{ID: args[1], Name: args[2], Kind: domain.RuleWorkProcess, ProcessNames: []string{args[3]}, Enabled: true})
+		bundleID := ""
+		if len(args) == 5 {
+			bundleID = args[4]
+		}
+		return c.coordinator.SetRule(ctx, domain.Rule{ID: args[1], Name: args[2], Kind: domain.RuleWorkProcess, ProcessNames: []string{args[3]}, BundleID: bundleID, Enabled: true})
 	case "schedule":
 		if len(args) != 6 {
 			return fmt.Errorf("usage: awake rule schedule ID NAME DAYS START END")
@@ -404,6 +408,20 @@ func statusFrom(state domain.State, evaluation domain.Evaluation) Status {
 	if !state.SnoozeUntil.IsZero() {
 		snoozedUntil = &state.SnoozeUntil
 	}
+	rules := make([]domain.Rule, len(state.Rules))
+	for i, rule := range state.Rules {
+		r := rule
+		for _, req := range evaluation.Requests {
+			if req.ID == "rule:"+rule.ID {
+				r.Active = true
+				break
+			}
+		}
+		if r.BundleID != "" && containsString(state.LastObservedBundleIDs, r.BundleID) {
+			r.AppOpen = true
+		}
+		rules[i] = r
+	}
 	return Status{
 		Active:            evaluation.Effective,
 		BatterySuppressed: evaluation.BatterySuppressed,
@@ -411,7 +429,7 @@ func statusFrom(state domain.State, evaluation domain.Evaluation) Status {
 		LidSupport:        state.LidSupportEnabled,
 		SnoozedUntil:      snoozedUntil,
 		Requests:          append([]domain.Lease{}, evaluation.Requests...),
-		Rules:             append([]domain.Rule{}, state.Rules...),
+		Rules:             rules,
 		RecoveryPending:   state.SleepDisabledBaseline != nil || state.LegacyAssertionPID != nil,
 		RecoveryWarning:   state.RecoveryWarning,
 	}
@@ -491,6 +509,15 @@ func (c *CLI) help() {
 	fmt.Fprintln(c.stdout, "  awake set battery-guard|lid-support on|off")
 	fmt.Fprintln(c.stdout, "  awake setup")
 	fmt.Fprintln(c.stdout, "  awake recover")
+}
+
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func parsePID(value string) (int, error) {
