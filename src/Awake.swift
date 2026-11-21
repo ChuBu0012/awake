@@ -54,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Awake", action: #selector(openAbout), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Get Started Guide…", action: #selector(openGetStarted), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",")
         appMenu.addItem(NSMenuItem.separator())
@@ -88,6 +89,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     @objc private func openPreferences() {
         showSettingsWindow()
+    }
+
+    @objc private func openGetStarted() {
+        showGetStartedWindow(force: true)
     }
 
     @objc private func openAbout() {
@@ -135,6 +140,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                 onOpenSettings: { [weak self] in
                     self?.popover.performClose(nil)
                     self?.showSettingsWindow()
+                },
+                onOpenGetStarted: { [weak self] in
+                    self?.popover.performClose(nil)
+                    self?.showGetStartedWindow(force: true)
                 },
                 onAddApp: { [weak self] in self?.addAppRule() },
                 onAddProcess: { [weak self] in self?.addProcessRule() },
@@ -228,6 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         settingsWindow = window
 
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
@@ -238,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
         if let window = getStartedWindow {
             window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
             NSApplication.shared.activate(ignoringOtherApps: true)
             return
         }
@@ -265,6 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         getStartedWindow = window
 
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 

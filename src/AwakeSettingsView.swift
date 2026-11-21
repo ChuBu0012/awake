@@ -484,12 +484,10 @@ struct AwakeSettingsView: View {
                                     Text(rule.kind == "schedule" ? "Weekly Schedule" : rule.kind == "app_open" ? "App is open" : "Work process")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
-                                    Text("•")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary.opacity(0.4))
-                                    Text(settingsRuleStatusText(rule, isActive: isAct, isAppOpen: appOpen))
-                                        .font(.caption.weight(isAct ? .medium : .regular))
-                                        .foregroundColor(statusCol)
+                                    Circle()
+                                        .fill(statusCol)
+                                        .frame(width: 7, height: 7)
+                                        .help(settingsRuleStatusTooltip(rule, isActive: isAct, isAppOpen: appOpen))
                                 }
                             }
                             Spacer()
@@ -831,31 +829,31 @@ struct AwakeSettingsView: View {
         return .secondary.opacity(0.5)
     }
 
-    private func settingsRuleStatusText(_ rule: AwakeStatus.Rule, isActive: Bool, isAppOpen: Bool) -> String {
-        guard rule.enabled else { return "Paused" }
+    private func settingsRuleStatusTooltip(_ rule: AwakeStatus.Rule, isActive: Bool, isAppOpen: Bool) -> String {
+        guard rule.enabled else { return "Rule paused" }
         switch rule.kind {
         case "work_process":
             if isActive {
-                return "● Agent / Task running"
+                return "Agent / Task running (Active)"
             } else if isAppOpen {
-                return "○ App open, idle"
+                return "App open, idle"
             } else {
-                return "○ App closed"
+                return "App closed"
             }
         case "app_open":
             if isActive {
-                return "● App is open"
+                return "App is open (Active)"
             } else {
-                return "○ App closed"
+                return "App closed"
             }
         case "schedule":
             if isActive {
-                return "● Schedule active"
+                return "Schedule active"
             } else {
-                return "○ Outside schedule"
+                return "Outside schedule"
             }
         default:
-            return isActive ? "● Active" : "○ Inactive"
+            return isActive ? "Active" : "Inactive"
         }
     }
 }

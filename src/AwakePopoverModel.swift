@@ -73,7 +73,7 @@ final class AwakePopoverModel: ObservableObject {
     func toggleAwake(ownerPID: Int32 = ProcessInfo.processInfo.processIdentifier) {
         guard !isBusy else { return }
 
-        if status?.requests.contains(where: { $0.source == "manual" }) == true {
+        if status?.active == true {
             performAction(["off"])
             return
         }

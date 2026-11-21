@@ -4,6 +4,7 @@ import SwiftUI
 struct AwakePopoverView: View {
     @ObservedObject var model: AwakePopoverModel
     let onOpenSettings: () -> Void
+    let onOpenGetStarted: () -> Void
     let onAddApp: () -> Void
     let onAddProcess: () -> Void
     let onAddSchedule: () -> Void
@@ -217,11 +218,11 @@ struct AwakePopoverView: View {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    Image(systemName: isManualOn ? "moon.zzz.fill" : "eye.fill")
+                    Image(systemName: isActive ? "moon.zzz.fill" : "eye.fill")
                         .font(.body.weight(.semibold))
                 }
 
-                Text(model.isBusy ? "Updating…" : (isManualOn ? "Turn Off Awake" : "Turn On Awake"))
+                Text(model.isBusy ? "Updating…" : (isActive ? "Turn Off Awake" : "Turn On Awake"))
                     .font(.body.weight(.semibold))
 
                 Spacer()
@@ -235,9 +236,9 @@ struct AwakePopoverView: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
-        .tint(isManualOn ? .secondary : .accentColor)
+        .tint(isActive ? .secondary : .accentColor)
         .disabled(model.isBusy)
-        .accessibilityHint(isManualOn ? "Turns off sleep prevention" : "Prevents this Mac from sleeping")
+        .accessibilityHint(isActive ? "Turns off sleep prevention" : "Prevents this Mac from sleeping")
     }
 
     // MARK: - Duration Selector
@@ -366,16 +367,14 @@ struct AwakePopoverView: View {
                 Text(rule.name)
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Text(ruleKindDescription(rule.kind))
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
-                    Text("•")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary.opacity(0.4))
-                    Text(ruleStatusText(rule, isActive: isAct, isAppOpen: appOpen))
-                        .font(.system(size: 10, weight: isAct ? .medium : .regular))
-                        .foregroundColor(statusCol)
+                    Circle()
+                        .fill(statusCol)
+                        .frame(width: 6, height: 6)
+                        .help(ruleStatusTooltip(rule, isActive: isAct, isAppOpen: appOpen))
                 }
             }
 
@@ -475,31 +474,31 @@ struct AwakePopoverView: View {
         return .secondary.opacity(0.5)
     }
 
-    private func ruleStatusText(_ rule: AwakeStatus.Rule, isActive: Bool, isAppOpen: Bool) -> String {
-        guard rule.enabled else { return "Paused" }
+    private func ruleStatusTooltip(_ rule: AwakeStatus.Rule, isActive: Bool, isAppOpen: Bool) -> String {
+        guard rule.enabled else { return "Rule paused" }
         switch rule.kind {
         case "work_process":
             if isActive {
-                return "● Agent / Task running"
+                return "Agent / Task running (Active)"
             } else if isAppOpen {
-                return "○ App open, idle"
+                return "App open, idle"
             } else {
-                return "○ App closed"
+                return "App closed"
             }
         case "app_open":
             if isActive {
-                return "● App is open"
+                return "App is open (Active)"
             } else {
-                return "○ App closed"
+                return "App closed"
             }
         case "schedule":
             if isActive {
-                return "● Schedule active"
+                return "Schedule active"
             } else {
-                return "○ Outside schedule"
+                return "Outside schedule"
             }
         default:
-            return isActive ? "● Active" : "○ Inactive"
+            return isActive ? "Active" : "Inactive"
         }
     }
 
@@ -556,6 +555,14 @@ struct AwakePopoverView: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut(",", modifiers: .command)
+
+            Spacer()
+
+            Button(action: onOpenGetStarted) {
+                Label("Get Started…", systemImage: "sparkles")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
 
             Spacer()
 
