@@ -87,6 +87,10 @@ func (c *CLI) Run(ctx context.Context, args []string) error {
 		}
 		_, err := c.coordinator.Tick(ctx)
 		return err
+	case "hold":
+		return c.hold(ctx, args)
+	case "release":
+		return c.release(ctx, args)
 	case "test", "verify":
 		return c.verify(ctx)
 	case "stop-automation":
@@ -362,7 +366,7 @@ func (c *CLI) rule(ctx context.Context, args []string) error {
 		if len(args) == 5 {
 			bundleID = args[4]
 		}
-		return c.coordinator.SetRule(ctx, domain.Rule{ID: args[1], Name: args[2], Kind: domain.RuleWorkProcess, ProcessNames: []string{args[3]}, BundleID: bundleID, Enabled: true})
+		return c.coordinator.SetRule(ctx, domain.Rule{ID: args[1], Name: args[2], Kind: domain.RuleWorkProcess, ProcessNames: []string{args[3]}, BundleID: bundleID, Enabled: true, SmartActive: true})
 	case "schedule":
 		if len(args) != 6 {
 			return fmt.Errorf("usage: awake rule schedule ID NAME DAYS START END")
@@ -577,6 +581,60 @@ func parseClockTime(value string) (int, error) {
 		return 0, fmt.Errorf("time must use 24-hour HH:MM format: %w", err)
 	}
 	return parsed.Hour()*60 + parsed.Minute(), nil
+}
+
+func (c *CLI) hold(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: awake hold <id> [--ttl <duration>]")
+	}
+	id := args[0]
+	ttl := 30 * time.Minute
+	if len(args) >= 3 && args[1] == "--ttl" {
+		parsed, err := time.ParseDuration(args[2])
+		if err != nil {
+			return fmt.Errorf("invalid ttl duration: %w", err)
+		}
+		ttl = parsed
+	}
+	now := c.now()
+	lease := domain.Lease{
+		ID:        "hold:" + id,
+		Source:    domain.SourceCommand,
+		Reason:    "Agent hold: " + id,
+		ExpiresAt: now.Add(ttl),
+	}
+	if err := c.coordinator.AddLease(ctx, lease); err != nil {
+		_ = c.coordinator.Release(ctx, lease.ID)
+		if err := c.coordinator.AddLease(ctx, lease); err != nil {
+			return err
+		}
+	}
+	_, err := c.coordinator.Tick(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.stdout, "Holding sleep prevention for %q (ttl %v)\n", id, ttl)
+	return nil
+}
+
+func (c *CLI) release(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: awake release <id>")
+	}
+	id := args[0]
+	targetID := id
+	if !strings.HasPrefix(targetID, "hold:") {
+		targetID = "hold:" + id
+	}
+	if err := c.coordinator.Release(ctx, targetID); err != nil {
+		return err
+	}
+	_, err := c.coordinator.Tick(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.stdout, "Released sleep prevention for %q\n", id)
+	return nil
 }
 
 func newLeaseID() (string, error) {

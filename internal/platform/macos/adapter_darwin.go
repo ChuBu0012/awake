@@ -58,20 +58,42 @@ func (a *Adapter) ReadPower(ctx context.Context) (domain.PowerState, error) {
 }
 
 func (a *Adapter) Observe(ctx context.Context) (domain.Observation, error) {
-	output, err := a.runner.Run(ctx, "/bin/ps", "-axo", "comm=")
+	output, err := a.runner.Run(ctx, "/bin/ps", "-axo", "%cpu=,comm=")
 	if err != nil {
 		return domain.Observation{}, err
 	}
 	observation := domain.Observation{}
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
-		name := filepath.Base(strings.TrimSpace(scanner.Text()))
-		if name != "" {
-			observation.Processes = append(observation.Processes, domain.Process{Name: name})
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			cpuVal, _ := strconv.ParseFloat(fields[0], 64)
+			fullPath := strings.Join(fields[1:], " ")
+			name := filepath.Base(fullPath)
+			if name != "" {
+				observation.Processes = append(observation.Processes, domain.Process{
+					Name:       name,
+					CPUPercent: cpuVal,
+				})
+			}
+		} else if len(fields) == 1 {
+			name := filepath.Base(fields[0])
+			if name != "" {
+				observation.Processes = append(observation.Processes, domain.Process{Name: name})
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return domain.Observation{}, err
+	}
+	if ioregOut, err := a.runner.Run(ctx, "/usr/sbin/ioreg", "-r", "-k", "AppleClamshellState"); err == nil {
+		if strings.Contains(string(ioregOut), `"AppleClamshellState" = Yes`) {
+			observation.LidClosed = true
+		}
 	}
 	return observation, nil
 }

@@ -47,24 +47,26 @@ type Rule struct {
 	EndMinute    int            `json:"end_minute,omitempty"`
 	Active       bool           `json:"active,omitempty"`
 	AppOpen      bool           `json:"app_open,omitempty"`
+	SmartActive  bool           `json:"smart_active,omitempty"`
 }
 
 type State struct {
-	SchemaVersion         int                  `json:"schema_version"`
-	BatteryGuardEnabled   bool                 `json:"battery_guard_enabled"`
-	LidSupportEnabled     bool                 `json:"lid_support_enabled,omitempty"`
-	SnoozeUntil           time.Time            `json:"snooze_until,omitempty"`
-	Leases                []Lease              `json:"leases,omitempty"`
-	Rules                 []Rule               `json:"rules,omitempty"`
-	ActivityLastSeen      map[string]time.Time `json:"activity_last_seen,omitempty"`
-	Assertions            map[string]ProcessID `json:"assertions,omitempty"`
-	AutomationOwner       *ProcessID           `json:"automation_owner,omitempty"`
-	LastObservedBundleIDs []string             `json:"last_observed_bundle_ids,omitempty"`
-	LegacyAssertionPID    *int                 `json:"legacy_assertion_pid,omitempty"`
-	RecoveryWarning       string               `json:"recovery_warning,omitempty"`
-	MigrationRequired     bool                 `json:"-"`
-	SleepDisabledBaseline *bool                `json:"sleep_disabled_baseline,omitempty"`
-	SleepDisabledApplied  *bool                `json:"sleep_disabled_applied,omitempty"`
+	SchemaVersion               int                  `json:"schema_version"`
+	BatteryGuardEnabled         bool                 `json:"battery_guard_enabled"`
+	LidSupportEnabled           bool                 `json:"lid_support_enabled,omitempty"`
+	SnoozeUntil                 time.Time            `json:"snooze_until,omitempty"`
+	Leases                      []Lease              `json:"leases,omitempty"`
+	Rules                       []Rule               `json:"rules,omitempty"`
+	ActivityLastSeen            map[string]time.Time `json:"activity_last_seen,omitempty"`
+	Assertions                  map[string]ProcessID `json:"assertions,omitempty"`
+	AutomationOwner             *ProcessID           `json:"automation_owner,omitempty"`
+	LastObservedBundleIDs       []string             `json:"last_observed_bundle_ids,omitempty"`
+	LegacyAssertionPID          *int                 `json:"legacy_assertion_pid,omitempty"`
+	RecoveryWarning             string               `json:"recovery_warning,omitempty"`
+	MigrationRequired           bool                 `json:"-"`
+	SleepDisabledBaseline       *bool                `json:"sleep_disabled_baseline,omitempty"`
+	SleepDisabledApplied        *bool                `json:"sleep_disabled_applied,omitempty"`
+	ClamshellBatteryActiveSince time.Time            `json:"clamshell_battery_active_since,omitempty"`
 }
 
 type PowerState struct {
@@ -74,17 +76,20 @@ type PowerState struct {
 }
 
 type Process struct {
-	Name string `json:"name"`
+	Name       string  `json:"name"`
+	CPUPercent float64 `json:"cpu_percent,omitempty"`
 }
 
 type Observation struct {
 	OpenBundleIDs []string  `json:"open_bundle_ids,omitempty"`
 	Processes     []Process `json:"processes,omitempty"`
+	LidClosed     bool      `json:"lid_closed,omitempty"`
 }
 
 type EvaluationInput struct {
 	Now           time.Time
 	Power         PowerState
+	LidClosed     bool
 	OpenBundleIDs []string
 	Processes     []Process
 }
@@ -92,6 +97,7 @@ type EvaluationInput struct {
 type Evaluation struct {
 	Effective         bool
 	BatterySuppressed bool
+	ClamshellTimedOut bool
 	Requests          []Lease
 }
 
@@ -113,12 +119,10 @@ func Evaluate(state State, input EvaluationInput) Evaluation {
 	}
 
 	for _, rule := range state.Rules {
-		if !rule.Enabled || rule.ID == "" || (snoozed && (rule.Kind == RuleAppOpen || rule.Kind == RuleWorkProcess || rule.Kind == RuleSchedule)) {
+		if !rule.Enabled || rule.ID == "" || (snoozed && isAutomationRule(rule.Kind)) {
 			continue
 		}
-		matched := ruleMatches(rule, input)
-		// Note: The 2-minute restart grace period has been temporarily removed per user request
-		// to facilitate immediate verification and testing. Recorded in .agents/memory/decisions.md.
+		matched := ruleMatches(rule, state, input)
 		if matched {
 			requests = append(requests, Lease{ID: "rule:" + rule.ID, Source: sourceForRule(rule.Kind), Reason: ruleDisplayName(rule)})
 		}
@@ -126,21 +130,58 @@ func Evaluate(state State, input EvaluationInput) Evaluation {
 
 	batteryLowOrUnknown := !input.Power.BatteryKnown || input.Power.BatteryPercent <= 20
 	batterySuppressed := state.BatteryGuardEnabled && !input.Power.OnAC && batteryLowOrUnknown && len(requests) > 0
-	return Evaluation{Effective: len(requests) > 0 && !batterySuppressed, BatterySuppressed: batterySuppressed, Requests: requests}
+
+	// Backpack Clamshell Safety: Cap sleep prevention on battery with lid closed to max 2 hours
+	clamshellTimedOut := false
+	if !input.Power.OnAC && input.Power.BatteryKnown && input.LidClosed && len(requests) > 0 {
+		if !state.ClamshellBatteryActiveSince.IsZero() && input.Now.Sub(state.ClamshellBatteryActiveSince) >= 2*time.Hour {
+			clamshellTimedOut = true
+		}
+	}
+
+	effective := len(requests) > 0 && !batterySuppressed && !clamshellTimedOut
+	return Evaluation{
+		Effective:         effective,
+		BatterySuppressed: batterySuppressed,
+		ClamshellTimedOut: clamshellTimedOut,
+		Requests:          requests,
+	}
 }
 
-// RecordActivityMatches refreshes restart-grace timestamps for currently
-// matching Activity rules. It is called only while the menu-bar evaluator owns
-// the automation session.
+// RecordActivityMatches refreshes activity timestamps for matching rules.
 func RecordActivityMatches(state *State, input EvaluationInput) {
 	if state.ActivityLastSeen == nil {
 		state.ActivityLastSeen = make(map[string]time.Time)
 	}
 	for _, rule := range state.Rules {
-		if rule.Enabled && (rule.Kind == RuleAppOpen || rule.Kind == RuleWorkProcess) && ruleMatches(rule, input) {
-			state.ActivityLastSeen[rule.ID] = input.Now
+		if !rule.Enabled || !isActivityRule(rule.Kind) {
+			continue
+		}
+		switch rule.Kind {
+		case RuleAppOpen:
+			if rule.BundleID != "" && containsString(input.OpenBundleIDs, rule.BundleID) {
+				state.ActivityLastSeen[rule.ID] = input.Now
+			}
+		case RuleWorkProcess:
+			for _, proc := range input.Processes {
+				if containsString(rule.ProcessNames, proc.Name) {
+					// If CPU is actively burning (>5%) or unmeasured (0.0 without smart mode), mark active
+					if !rule.SmartActive || proc.CPUPercent >= 5.0 || proc.CPUPercent == 0 {
+						state.ActivityLastSeen[rule.ID] = input.Now
+					}
+					break
+				}
+			}
 		}
 	}
+}
+
+func isActivityRule(kind RuleKind) bool {
+	return kind == RuleAppOpen || kind == RuleWorkProcess
+}
+
+func isAutomationRule(kind RuleKind) bool {
+	return isActivityRule(kind) || kind == RuleSchedule
 }
 
 func isAutomationSource(source Source) bool {
@@ -161,17 +202,35 @@ func ruleDisplayName(rule Rule) string {
 	return rule.ID
 }
 
-func ruleMatches(rule Rule, input EvaluationInput) bool {
+func ruleMatches(rule Rule, state State, input EvaluationInput) bool {
 	switch rule.Kind {
 	case RuleAppOpen:
 		return rule.BundleID != "" && containsString(input.OpenBundleIDs, rule.BundleID)
 	case RuleWorkProcess:
-		for _, process := range input.Processes {
+		var foundProc *Process
+		for i, process := range input.Processes {
 			if containsString(rule.ProcessNames, process.Name) {
-				return true
+				foundProc = &input.Processes[i]
+				break
 			}
 		}
-		return false
+		// If process is not running at all, stop immediately (0s delay per decisions.md)
+		if foundProc == nil {
+			return false
+		}
+		// If Smart Activity is enabled:
+		if rule.SmartActive {
+			// CPU >= 5% is active
+			if foundProc.CPUPercent >= 5.0 {
+				return true
+			}
+			// CPU < 5%: check 60s sustained idle debounce window
+			if lastSeen, exists := state.ActivityLastSeen[rule.ID]; exists {
+				return input.Now.Sub(lastSeen) < 60*time.Second
+			}
+			return false
+		}
+		return true
 	case RuleSchedule:
 		return ScheduleActive(rule, input.Now)
 	default:
@@ -216,17 +275,11 @@ func inScheduleWindow(rule Rule, startDay, at time.Time) bool {
 	return startOK && endOK && !at.Before(start) && at.Before(end)
 }
 
-// resolveLocalBoundary maps a wall-clock minute to a real instant. Ambiguous
-// start times use the first occurrence and ambiguous end times use the last,
-// so a repeated-hour schedule remains one continuous interval. Missing times
-// move to the next valid local minute on the same date.
+// resolveLocalBoundary maps a wall-clock minute to a real instant.
 func resolveLocalBoundary(day time.Time, minute int, startBoundary bool) (time.Time, bool) {
 	location := day.Location()
 	year, month, date := day.Date()
 	wall := time.Date(year, month, date, minute/60, minute%60, 0, 0, time.UTC)
-	// A wall-clock time can map to zero, one, or two instants. Collect the
-	// offsets around the date so ordinary evaluations need only a few checks;
-	// scanning every minute in a six-hour window on each app poll was wasteful.
 	offsets := make(map[int]struct{}, 2)
 	for _, delta := range []int{-24, 0, 24} {
 		probe := time.Date(year, month, date+delta, 12, 0, 0, 0, location)
@@ -263,8 +316,6 @@ func resolveLocalBoundary(day time.Time, minute int, startBoundary bool) (time.T
 		}
 		return selected, true
 	}
-	// Missing wall-clock times (DST spring gaps) advance to the next valid
-	// minute on the same local date. Gaps are at most a few hours.
 	for nextMinute := minute + 1; nextMinute < 24*60; nextMinute++ {
 		if candidates := matching(nextMinute); len(candidates) > 0 {
 			selected := candidates[0]

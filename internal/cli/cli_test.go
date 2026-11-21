@@ -347,3 +347,44 @@ func TestRuleProcessWithBundleIDAndStatusActiveAppOpen(t *testing.T) {
 		t.Error("expected rule.AppOpen = true")
 	}
 }
+
+func TestHoldAndReleaseLease(t *testing.T) {
+	now := time.Date(2026, time.November, 21, 10, 0, 0, 0, time.UTC)
+	adapter := &fakeAdapter{running: make(map[string]domain.ProcessID), now: now}
+	stateStore, err := store.Open(filepath.Join(t.TempDir(), "awake"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := engine.New(stateStore, adapter, func() time.Time { return now })
+	runner := &fakeCommandRunner{exitCode: 0}
+	outBuf := &bytes.Buffer{}
+	app := New(coordinator, adapter, runner, outBuf, &bytes.Buffer{})
+	app.now = func() time.Time { return now }
+
+	// Test 1: awake hold claude-session --ttl 15m
+	if err := app.Run(context.Background(), []string{"hold", "claude-session", "--ttl", "15m"}); err != nil {
+		t.Fatalf("awake hold failed: %v", err)
+	}
+	state, err := stateStore.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Leases) != 1 || state.Leases[0].ID != "hold:claude-session" {
+		t.Fatalf("expected lease hold:claude-session, got %#v", state.Leases)
+	}
+	if state.Leases[0].ExpiresAt != now.Add(15*time.Minute) {
+		t.Fatalf("expected expires_at %v, got %v", now.Add(15*time.Minute), state.Leases[0].ExpiresAt)
+	}
+
+	// Test 2: awake release claude-session
+	if err := app.Run(context.Background(), []string{"release", "claude-session"}); err != nil {
+		t.Fatalf("awake release failed: %v", err)
+	}
+	stateAfterRelease, err := stateStore.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stateAfterRelease.Leases) != 0 {
+		t.Fatalf("expected 0 leases after release, got %#v", stateAfterRelease.Leases)
+	}
+}

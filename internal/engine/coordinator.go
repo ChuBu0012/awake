@@ -246,6 +246,7 @@ func (c *Coordinator) Tick(ctx context.Context, observed ...domain.Observation) 
 			if observed[0].Processes != nil {
 				observation.Processes = append([]domain.Process(nil), observed[0].Processes...)
 			}
+			observation.LidClosed = observed[0].LidClosed
 		} else {
 			observation.OpenBundleIDs = append([]string(nil), state.LastObservedBundleIDs...)
 		}
@@ -256,6 +257,7 @@ func (c *Coordinator) Tick(ctx context.Context, observed ...domain.Observation) 
 		}
 		input := domain.EvaluationInput{
 			Now: now, Power: power,
+			LidClosed:     observation.LidClosed,
 			OpenBundleIDs: observation.OpenBundleIDs,
 			Processes:     observation.Processes,
 		}
@@ -264,6 +266,13 @@ func (c *Coordinator) Tick(ctx context.Context, observed ...domain.Observation) 
 			evaluationState.ActivityLastSeen = state.ActivityLastSeen
 		}
 		result = domain.Evaluate(evaluationState, input)
+		if result.Effective && !power.OnAC && power.BatteryKnown && input.LidClosed {
+			if state.ClamshellBatteryActiveSince.IsZero() {
+				state.ClamshellBatteryActiveSince = now
+			}
+		} else {
+			state.ClamshellBatteryActiveSince = time.Time{}
+		}
 		desired := make(map[string]domain.Lease, len(result.Requests))
 		if result.Effective {
 			for _, request := range result.Requests {

@@ -137,3 +137,76 @@ func TestActivityRequestStopsImmediatelyWhenProcessDisappears(t *testing.T) {
 		t.Fatalf("request without running process = %#v, want immediately inactive", got)
 	}
 }
+
+func TestClamshellOnBatteryCapsSleepToTwoHours(t *testing.T) {
+	now := time.Date(2026, time.November, 21, 10, 0, 0, 0, time.UTC)
+	state := State{
+		Leases:                      []Lease{{ID: "manual", Source: SourceManual}},
+		ClamshellBatteryActiveSince: now.Add(-2*time.Hour - 5*time.Minute),
+	}
+	input := EvaluationInput{
+		Now:       now,
+		Power:     PowerState{OnAC: false, BatteryPercent: 80, BatteryKnown: true},
+		LidClosed: true,
+	}
+
+	result := Evaluate(state, input)
+	if result.Effective || !result.ClamshellTimedOut {
+		t.Fatalf("clamshell on battery after >2h should time out, got = %#v", result)
+	}
+
+	// While under 2 hours, it should remain effective
+	state.ClamshellBatteryActiveSince = now.Add(-1 * time.Hour)
+	resultWithin2h := Evaluate(state, input)
+	if !resultWithin2h.Effective || resultWithin2h.ClamshellTimedOut {
+		t.Fatalf("clamshell on battery under 2h should be effective, got = %#v", resultWithin2h)
+	}
+}
+
+func TestSmartActivityDebouncesLowCPUProcess(t *testing.T) {
+	now := time.Date(2026, time.November, 21, 10, 0, 0, 0, time.UTC)
+	rule := Rule{
+		ID:           "cursor-agent",
+		Kind:         RuleWorkProcess,
+		Enabled:      true,
+		ProcessNames: []string{"Cursor Helper"},
+		SmartActive:  true,
+	}
+
+	// Case 1: Process running with CPU > 5% -> Asserted active
+	state := State{
+		Rules: []Rule{rule},
+	}
+	inputActive := EvaluationInput{
+		Now:       now,
+		Power:     PowerState{OnAC: true, BatteryPercent: 100, BatteryKnown: true},
+		Processes: []Process{{Name: "Cursor Helper", CPUPercent: 15.2}},
+	}
+	RecordActivityMatches(&state, inputActive)
+	resActive := Evaluate(state, inputActive)
+	if !resActive.Effective || len(resActive.Requests) != 1 {
+		t.Fatalf("smart activity with CPU > 5%% should be active, got %#v", resActive)
+	}
+
+	// Case 2: Process CPU drops to 0.2% (waiting for network) within 30s -> Still active due to debounce
+	inputLowCPU := EvaluationInput{
+		Now:       now.Add(30 * time.Second),
+		Power:     PowerState{OnAC: true, BatteryPercent: 100, BatteryKnown: true},
+		Processes: []Process{{Name: "Cursor Helper", CPUPercent: 0.2}},
+	}
+	resDebounce := Evaluate(state, inputLowCPU)
+	if !resDebounce.Effective || len(resDebounce.Requests) != 1 {
+		t.Fatalf("smart activity within 60s debounce window should remain active, got %#v", resDebounce)
+	}
+
+	// Case 3: Process CPU remains < 5% after 65s sustained idle -> Inactive / released
+	inputSustainedIdle := EvaluationInput{
+		Now:       now.Add(65 * time.Second),
+		Power:     PowerState{OnAC: true, BatteryPercent: 100, BatteryKnown: true},
+		Processes: []Process{{Name: "Cursor Helper", CPUPercent: 0.1}},
+	}
+	resIdle := Evaluate(state, inputSustainedIdle)
+	if resIdle.Effective || len(resIdle.Requests) != 0 {
+		t.Fatalf("smart activity after 65s sustained idle should be released, got %#v", resIdle)
+	}
+}
