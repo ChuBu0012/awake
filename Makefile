@@ -3,6 +3,7 @@
 SHELL := /usr/bin/env bash
 APP_NAME := Awake
 BUNDLE_NAME := $(APP_NAME).app
+DMG_NAME := $(APP_NAME).dmg
 BUILD_DIR := build
 BIN_SRC := bin/awake
 GO_BIN := $(BUILD_DIR)/awake
@@ -17,7 +18,7 @@ INSTALL_BIN_DIR := $(HOME)/.local/bin
 INSTALL_LIB_DIR := $(HOME)/.local/lib/awake
 INSTALL_APP_DIR := $(HOME)/Applications
 
-.PHONY: all build cli icon test clean install setup uninstall help
+.PHONY: all build cli dmg icon test clean install setup uninstall help
 
 all: build
 
@@ -33,7 +34,7 @@ build: icon cli
 	@mkdir -p $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS
 	@mkdir -p $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources
 	@mkdir -p /tmp/swift-module-cache
-	@chmod +x bin/awake scripts/setup-sudoers.sh scripts/atomic-install-file.sh
+	@chmod +x bin/awake scripts/setup-sudoers.sh scripts/atomic-install-file.sh scripts/create-dmg.sh
 	swiftc -O -target $(SWIFT_TARGET) -module-cache-path /tmp/swift-module-cache $(SWIFT_SOURCES) -o $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME).new
 	mv -f $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME).new $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME)
 	cp $(PLIST_SRC) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Info.plist
@@ -43,6 +44,11 @@ build: icon cli
 	./scripts/verify-macos-target.sh $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME) $(GO_BIN) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Info.plist
 	@chmod +x $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME)
 	@echo "==> Build successful: $(BUILD_DIR)/$(BUNDLE_NAME)"
+
+## dmg: Package the .app bundle into a distributable compressed macOS .dmg archive
+dmg: build
+	@echo "==> Creating $(DMG_NAME)..."
+	./scripts/create-dmg.sh
 
 ## cli: Build the shared Go engine and CLI for macOS 12+
 cli: $(GO_BIN)
@@ -61,6 +67,7 @@ test:
 	bash -n scripts/atomic-install-file.sh
 	bash -n scripts/verify-macos-target.sh
 	bash -n scripts/test-swift-status.sh
+	bash -n scripts/create-dmg.sh
 	./scripts/test-swift-status.sh
 	@echo "==> Running Go tests..."
 	GOTOOLCHAIN=$(GO_TOOLCHAIN) go test ./...
@@ -125,6 +132,7 @@ help:
 	@echo "Usage:"
 	@echo "  make build      Build the .app bundle and CLI"
 	@echo "  make cli        Build the shared CLI engine"
+	@echo "  make dmg        Package the .app bundle into a distributable .dmg"
 	@echo "  make setup      Configure passwordless sudo for pmset"
 	@echo "  make install    Install to ~/.local/bin and ~/Applications"
 	@echo "  make test       Validate script syntax and compile"
