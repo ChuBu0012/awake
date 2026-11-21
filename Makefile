@@ -90,6 +90,7 @@ test:
 	bash -n scripts/create-dmg.sh
 	bash -n scripts/clean-run.sh
 	bash -n scripts/toggle-appearance.sh
+	bash -n scripts/sleep-test-counter.sh
 	./scripts/test-swift-status.sh
 	@echo "==> Running Go tests..."
 	GOTOOLCHAIN=$(GO_TOOLCHAIN) go test ./...

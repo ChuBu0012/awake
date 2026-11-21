@@ -166,7 +166,7 @@ func RecordActivityMatches(state *State, input EvaluationInput) {
 			for _, proc := range input.Processes {
 				if containsString(rule.ProcessNames, proc.Name) {
 					// If CPU is actively burning (>5%) or unmeasured (0.0 without smart mode), mark active
-					if !rule.SmartActive || proc.CPUPercent >= 5.0 || proc.CPUPercent == 0 {
+					if !rule.SmartActive || proc.CPUPercent >= 5.0 {
 						state.ActivityLastSeen[rule.ID] = input.Now
 					}
 					break

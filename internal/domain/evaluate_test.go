@@ -210,3 +210,29 @@ func TestSmartActivityDebouncesLowCPUProcess(t *testing.T) {
 		t.Fatalf("smart activity after 65s sustained idle should be released, got %#v", resIdle)
 	}
 }
+
+func TestSmartActivityReleasesIdleProcessReportedAtZeroCPU(t *testing.T) {
+	start := time.Date(2026, time.November, 21, 10, 0, 0, 0, time.UTC)
+	rule := Rule{
+		ID:           "idle-agent",
+		Kind:         RuleWorkProcess,
+		Enabled:      true,
+		ProcessNames: []string{"agentd"},
+		SmartActive:  true,
+	}
+	state := State{Rules: []Rule{rule}}
+	power := PowerState{OnAC: true, BatteryPercent: 100, BatteryKnown: true}
+
+	// Process was busy once, then reports exactly 0.0% CPU on every later tick.
+	busy := EvaluationInput{Now: start, Power: power, Processes: []Process{{Name: "agentd", CPUPercent: 12}}}
+	RecordActivityMatches(&state, busy)
+	for i := 1; i <= 10; i++ {
+		idle := EvaluationInput{Now: start.Add(time.Duration(i*10) * time.Second), Power: power, Processes: []Process{{Name: "agentd", CPUPercent: 0}}}
+		RecordActivityMatches(&state, idle)
+	}
+
+	after := EvaluationInput{Now: start.Add(2 * time.Minute), Power: power, Processes: []Process{{Name: "agentd", CPUPercent: 0}}}
+	if res := Evaluate(state, after); res.Effective || len(res.Requests) != 0 {
+		t.Fatalf("idle process at 0%% CPU must release after the 60s debounce, got %#v", res)
+	}
+}
