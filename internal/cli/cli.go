@@ -401,8 +401,8 @@ func statusFrom(state domain.State, evaluation domain.Evaluation) Status {
 		BatteryGuard:      state.BatteryGuardEnabled,
 		LidSupport:        state.LidSupportEnabled,
 		SnoozedUntil:      state.SnoozeUntil,
-		Requests:          evaluation.Requests,
-		Rules:             state.Rules,
+		Requests:          append([]domain.Lease{}, evaluation.Requests...),
+		Rules:             append([]domain.Rule{}, state.Rules...),
 		RecoveryPending:   state.SleepDisabledBaseline != nil || state.RecoveryWarning != "" || state.LegacyAssertionPID != nil,
 		RecoveryWarning:   state.RecoveryWarning,
 	}

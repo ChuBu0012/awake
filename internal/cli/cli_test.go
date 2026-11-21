@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -106,6 +107,26 @@ func TestSetupRunsExactInstalledHelperPath(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.args, []string{path}) {
 		t.Fatalf("setup helper invocation = %#v, want exact path as one argv", runner.args)
+	}
+}
+
+func TestStatusJSONUsesEmptyArraysForNoRequestsOrRules(t *testing.T) {
+	data, err := json.Marshal(statusFrom(domain.State{}, domain.Evaluation{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"requests", "rules"} {
+		var values []json.RawMessage
+		if err := json.Unmarshal(result[key], &values); err != nil {
+			t.Fatalf("%s must be a JSON array, got %s: %v", key, result[key], err)
+		}
+		if values == nil {
+			t.Fatalf("%s must be [] rather than null", key)
+		}
 	}
 }
 
