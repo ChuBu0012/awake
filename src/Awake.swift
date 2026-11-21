@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private let model = AwakePopoverModel()
     private var statusObservation: AnyCancellable?
     private var lastPopoverCloseTime: TimeInterval = 0
+    private var globalEventMonitor: Any?
 
     // Windows
     private var settingsWindow: NSWindow?
@@ -43,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
+        stopEventMonitor()
         model.endSession()
     }
 
@@ -157,6 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     func popoverDidClose(_ notification: Notification) {
         lastPopoverCloseTime = ProcessInfo.processInfo.systemUptime
+        stopEventMonitor()
     }
 
     private func updateStatusItem(for status: AwakeStatus?) {
@@ -201,7 +204,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                 popover.contentSize = NSSize(width: 330, height: max(340, min(500, fitting.height)))
             }
         }
+        showPopover(relativeTo: button)
+    }
+
+    private func showPopover(relativeTo button: NSStatusBarButton) {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+        startEventMonitor()
+    }
+
+    private func startEventMonitor() {
+        if globalEventMonitor != nil { return }
+        globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self = self, self.popover.isShown else { return }
+            DispatchQueue.main.async {
+                self.popover.performClose(nil)
+            }
+        }
+    }
+
+    private func stopEventMonitor() {
+        if let monitor = globalEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalEventMonitor = nil
+        }
     }
 
     // MARK: - Windows Management
@@ -308,14 +334,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                 model.errorMessage = "The selected application does not have a valid bundle identifier."
             }
             if wasPopoverShown, let button = statusItem.button {
-                popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+                showPopover(relativeTo: button)
             }
             return
         }
         let appName = FileManager.default.displayName(atPath: url.path)
         model.addAppRule(name: appName, bundleID: bundleID)
         if wasPopoverShown, let button = statusItem.button {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            showPopover(relativeTo: button)
         }
     }
 
@@ -328,7 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             fields: ["Process name (e.g. node)"]
         ) else {
             if wasPopoverShown, let button = statusItem.button {
-                popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+                showPopover(relativeTo: button)
             }
             return
         }
@@ -336,13 +362,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         let name = values[0].trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else {
             if wasPopoverShown, let button = statusItem.button {
-                popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+                showPopover(relativeTo: button)
             }
             return
         }
         model.addProcessRule(name: name)
         if wasPopoverShown, let button = statusItem.button {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            showPopover(relativeTo: button)
         }
     }
 
@@ -356,7 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             defaults: ["mon,tue,wed,thu,fri 22:00 06:00"]
         ) else {
             if wasPopoverShown, let button = statusItem.button {
-                popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+                showPopover(relativeTo: button)
             }
             return
         }
@@ -365,13 +391,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         guard parts.count == 3 else {
             model.errorMessage = "Invalid format. Expected: mon,tue,wed,thu,fri 22:00 06:00"
             if wasPopoverShown, let button = statusItem.button {
-                popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+                showPopover(relativeTo: button)
             }
             return
         }
         model.addScheduleRule(days: parts[0], start: parts[1], end: parts[2])
         if wasPopoverShown, let button = statusItem.button {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            showPopover(relativeTo: button)
         }
     }
 
