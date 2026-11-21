@@ -25,12 +25,24 @@ Awake is developed in the open under the [MIT License](LICENSE). Contributions a
 
 **Requirements:** macOS 12 or later. Building from source requires Go 1.26 and Xcode Command Line Tools. Administrator access is only needed for optional lid-closed support. Idle-sleep prevention uses a per-request `caffeinate` assertion; the optional lid layer changes the system-wide `pmset` setting and restores the captured prior value.
 
-### 1. Build และ Install
+### ทางเลือกที่ 1: ติดตั้งผ่าน Disk Image (.dmg) (แนะนำ)
+คุณสามารถสร้างไฟล์ DMG สำหรับแจกจ่ายหรือนำไปติดตั้งบนเครื่องอื่นได้ง่ายๆ:
+```bash
+# สร้างไฟล์ DMG สำเร็จรูป (อยู่ที่ build/Awake.dmg)
+make dmg
+open build/Awake.dmg
+```
+ลาก `Awake.app` ลงในโฟลเดอร์ `Applications` แล้วเปิดใช้งานได้ทันที!
+
+### ทางเลือกที่ 2: Build และ Install จาก Terminal
 ```bash
 make install
 ```
 
-### 2. เปิดใช้ Lid-Closed Support (ตัวเลือก)
+### การตั้งค่าครั้งแรก (Get Started Wizard)
+เมื่อเปิด `Awake.app` ครั้งแรก ระบบจะเปิด **Get Started Wizard** (3 ขั้นตอน) ช่วยค้นหา AI Agents & เครื่องมือนักพัฒนาบนเครื่องของคุณ (Cursor, VS Code, Claude, Terminal ฯลฯ) และช่วยตั้งค่าสิทธิ์พับจอแบบอัตโนมัติ
+
+### เปิดใช้ Lid-Closed Support (ตัวเลือก)
 การป้องกันการหลับตามปกติไม่ต้องใช้ `sudo` การตั้งค่านี้เพิ่มกฎ sudoers แบบจำกัดเพื่อรองรับการพับจอ:
 ```bash
 make setup
