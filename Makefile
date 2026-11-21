@@ -9,6 +9,7 @@ GO_BIN := $(BUILD_DIR)/awake
 GO_TOOLCHAIN := go1.26.4
 GO_SOURCES := $(shell find cmd internal -name '*.go' 2>/dev/null)
 SWIFT_SRC := src/Awake.swift
+SWIFT_TARGET ?= $(shell uname -m)-apple-macos12.0
 PLIST_SRC := config/Info.plist
 ICNS_SRC := config/AppIcon.icns
 
@@ -32,11 +33,14 @@ build: icon cli
 	@mkdir -p $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS
 	@mkdir -p $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources
 	@mkdir -p /tmp/swift-module-cache
-	@chmod +x bin/awake scripts/setup-sudoers.sh
-	swiftc -O -module-cache-path /tmp/swift-module-cache $(SWIFT_SRC) -o $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME)
+	@chmod +x bin/awake scripts/setup-sudoers.sh scripts/atomic-install-file.sh
+	swiftc -O -target $(SWIFT_TARGET) -module-cache-path /tmp/swift-module-cache $(SWIFT_SRC) -o $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME).new
+	mv -f $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME).new $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME)
 	cp $(PLIST_SRC) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Info.plist
-	cp $(GO_BIN) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/awake
+	cp $(GO_BIN) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/awake.new
+	mv -f $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/awake.new $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/awake
 	cp $(ICNS_SRC) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Resources/AppIcon.icns
+	./scripts/verify-macos-target.sh $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME) $(GO_BIN) $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/Info.plist
 	@chmod +x $(BUILD_DIR)/$(BUNDLE_NAME)/Contents/MacOS/$(APP_NAME)
 	@echo "==> Build successful: $(BUILD_DIR)/$(BUNDLE_NAME)"
 
@@ -46,13 +50,16 @@ cli: $(GO_BIN)
 $(GO_BIN): go.mod $(GO_SOURCES)
 	@mkdir -p $(BUILD_DIR)
 	@echo "==> Building Awake CLI with Go $(GO_TOOLCHAIN)..."
-	GOTOOLCHAIN=$(GO_TOOLCHAIN) MACOSX_DEPLOYMENT_TARGET=12.0 go build -trimpath -o $(GO_BIN) ./cmd/awake
+	GOTOOLCHAIN=$(GO_TOOLCHAIN) MACOSX_DEPLOYMENT_TARGET=12.0 go build -trimpath -o $(GO_BIN).new ./cmd/awake
+	mv -f $(GO_BIN).new $(GO_BIN)
 
 ## test: Validate shell scripts syntax and build status
 test:
 	@echo "==> Validating shell scripts syntax..."
 	bash -n bin/awake
 	bash -n scripts/setup-sudoers.sh
+	bash -n scripts/atomic-install-file.sh
+	bash -n scripts/verify-macos-target.sh
 	@echo "==> Running Go tests..."
 	GOTOOLCHAIN=$(GO_TOOLCHAIN) go test ./...
 	@echo "==> Running Go vet..."
@@ -69,8 +76,8 @@ setup:
 install: build
 	@echo "==> Installing Awake CLI and App..."
 	@mkdir -p $(INSTALL_BIN_DIR) $(INSTALL_LIB_DIR) $(INSTALL_APP_DIR)
-	cp $(GO_BIN) $(INSTALL_BIN_DIR)/awake
-	cp scripts/setup-sudoers.sh $(INSTALL_LIB_DIR)/setup-sudoers.sh
+	./scripts/atomic-install-file.sh $(GO_BIN) $(INSTALL_BIN_DIR)/awake 755
+	./scripts/atomic-install-file.sh scripts/setup-sudoers.sh $(INSTALL_LIB_DIR)/setup-sudoers.sh 700
 	@chmod +x $(INSTALL_BIN_DIR)/awake
 	@chmod 700 $(INSTALL_LIB_DIR)
 	@chmod 700 $(INSTALL_LIB_DIR)/setup-sudoers.sh
