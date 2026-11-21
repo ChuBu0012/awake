@@ -189,17 +189,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func findCLI() -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = ["\(home)/.local/bin/awake", "/usr/local/bin/awake", "/opt/homebrew/bin/awake", Bundle.main.bundlePath + "/Contents/Resources/awake"]
+        let bundledCLI = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Resources/awake", isDirectory: false)
+            .path
+        let candidates = [bundledCLI, "\(home)/.local/bin/awake", "/usr/local/bin/awake", "/opt/homebrew/bin/awake"]
         return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) ?? "/usr/bin/false"
     }
 
     private func perform(_ arguments: [String]) {
         workQueue.async { [weak self] in
             guard let self else { return }
-            _ = self.runCLI(arguments)
+            let output = self.runCLI(arguments)
+                .replacingOccurrences(of: "\u{001B}\\[[0-9;]*m", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             let succeeded = self.lastCommandSucceeded
             DispatchQueue.main.async {
-                if !succeeded { self.showError("Awake command failed. Check the installation and permissions.") }
+                if !succeeded {
+                    let detail = output.isEmpty ? "Check the installation and permissions." : output
+                    self.showError("Awake command failed.\n\n\(detail)")
+                }
                 self.refresh()
             }
         }
