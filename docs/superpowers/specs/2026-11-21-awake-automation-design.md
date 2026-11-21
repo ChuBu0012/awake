@@ -1,5 +1,7 @@
 # Awake Automation and Open Source Readiness — Design
 
+This is the macOS-first product behavior specification. Cross-platform engine ownership, state format, platform capabilities, and release sequence are defined in [`2026-11-21-awake-cross-platform-architecture.md`](2026-11-21-awake-cross-platform-architecture.md). Where implementation details differ, preserve the behavior and safety rules in both documents.
+
 ## Intent
 
 Make Awake feel useful without routine manual on/off actions. The app should notice selected work locally, follow user-defined schedules, and clearly explain why it is keeping the Mac awake. The first-run flow should make setup approachable for people who do not know what a process or sleep assertion is.
@@ -71,19 +73,20 @@ Step 3 — Review and optional setup
 - Respect system Light/Dark appearance and accessibility settings.
 - Show why Awake is active, for example `Agent: <name>`, `Schedule: Weekdays 22:00–02:00`, or `Command: awake run ...`.
 - Notify only on automatic state transitions, with the source that caused the transition.
-- Manual Off starts a 30-minute pause of Activity/Schedule automation without changing the saved rules. A user can disable an individual rule in Settings to stop it persistently.
-- A direct `awake run` command is an explicit request and continues through an Activity/Schedule Snooze. Manual On also overrides Snooze. Show the effective source and Snooze expiry so users understand why Awake remains active.
+- Manual Off clears the Manual On request and starts a 30-minute pause of Activity/Schedule automation without changing saved rules. A user can disable an individual rule in Settings to stop it persistently.
+- A direct `awake run` command is an explicit request and continues through an Activity/Schedule Snooze. Manual On cancels Snooze and adds its own request. Show the effective source and Snooze expiry so users understand why Awake remains active.
+- Saved Activity/Schedule rules and the Snooze expiry survive app restarts. Manual On is session-scoped and ends when the menu-bar app quits or crashes; it does not reactivate at the next login.
 
 ## Automation behavior
 
-- Sources are the existing `awake run` command wrapper, selected Activity watchers, weekly Schedule rules, and a separate manual On request.
+- Sources are the existing `awake run` command wrapper, selected Activity watchers, weekly Schedule rules, and a separate Manual On request. Manual On is session-scoped and ends when the menu-bar app quits or crashes; it does not reactivate at the next login.
 - Each source has its own enabled state and active request. The normal aggregate is logical OR: any active request keeps the Mac awake; turning off one source removes only that request.
-- Arbitration order: (1) Battery Guard can deny or release keep-awake requests, but never kills the user's command; (2) explicit `awake run` leases and Manual On remain active through an Activity/Schedule Snooze; (3) Manual Off starts a 30-minute Snooze that suppresses only Activity and Schedule requests; (4) all unsnoozed enabled Activity/Schedule requests are combined with OR semantics. Turning an individual rule off disables that rule until the user turns it back on.
+- Arbitration order: (1) Battery Guard suppresses Awake's effective assertion when battery is at or below 20% on battery power, but does not delete active leases or kill the user's command; restore Awake's `SleepDisabled` change to the captured baseline while suppressed, then reapply it when AC returns or battery rises above the threshold. If the captured baseline was already `SleepDisabled=1`, Awake cannot force the system to sleep and must explain that another setting owns the behavior; (2) an explicit `awake run` lease remains active through an Activity/Schedule Snooze; (3) Manual Off clears Manual On and starts a 30-minute Snooze that suppresses only Activity and Schedule requests; (4) Manual On cancels Snooze and adds its own request; (5) all unsnoozed enabled Activity/Schedule requests are combined with OR semantics. Turning an individual rule off disables that rule until the user turns it back on.
 - A process watcher waits 2 minutes after its last matching process disappears before releasing its request. This grace period handles short restarts.
 - `App is open` matches the selected app by bundle identity. `Work process` uses an app-specific curated process mapping; custom process entries match the exact selected executable/process identity. Do not watch broad names such as `node` globally without an explicit user choice, and do not assume every child process means work is active.
 - A weekly schedule uses local wall-clock time and selected weekdays. The selected day is the start day: `Weekdays 22:00–02:00` includes Friday 22:00 through Saturday 02:00. Time-zone changes recalculate future occurrences in the Mac's current time zone. Daylight-saving gaps/repeated times need deterministic Foundation `Calendar` handling and user-visible documentation.
 - A schedule prevents sleep during its active window but does not wake a sleeping Mac.
-- The battery guard is evaluated before every GUI or CLI request, including standalone `awake run` when the menu-bar app is not open. If the battery drops below threshold during an active request, release the keep-awake request and notify, but leave the user's command running.
+- The Battery Guard threshold is 20% or lower while running on battery power; it does not block requests while connected to AC. The existing Battery Guard toggle remains available. Evaluate it before every GUI or CLI request, including standalone `awake run` when the menu-bar app is not open. If battery falls to the threshold during an active request, suppress Awake's IOPM assertion and restore the captured `SleepDisabled` baseline, but leave the lease and user's command running. If another owner had already disabled sleep, show that Battery Guard cannot override that setting. When the guard clears, resume all still-active eligible requests and notify once.
 - The menu-bar app continues evaluating rules when its Settings window is closed. In v1, explicit Quit stops Activity/Schedule evaluation; the optional login item launches the menu-bar app at the next login. Do not add a separate always-on helper in v1. `awake run` itself remains standalone.
 - Before the first active request, snapshot the prior `SleepDisabled` setting once. Do not replace that baseline when another source joins. When the final request ends, restore the snapshot. Treat an unknown or unreadable baseline as an error for privileged lid mode rather than guessing.
 
@@ -91,7 +94,7 @@ Step 3 — Review and optional setup
 
 - Store versioned rules and runtime requests under the current user's private configuration directory, shared by the app and CLI.
 - Keep durable user rules separate from ephemeral runtime leases. Each `awake run` gets a unique lease record containing a run ID, wrapper/command PIDs, process start identity, boot-session identity, and start time.
-- Publish changes through same-directory temporary files followed by atomic rename. Serialize state transitions and `pmset` reconciliation under one shared POSIX advisory lock (`fcntl`/`lockf`) so Bash and Swift cannot race on the saved baseline or system setting.
+- Publish changes through same-directory temporary files followed by atomic rename. The shared engine is the sole owner of state mutations, locking, and `pmset` reconciliation. The Swift UI and the legacy Bash CLI delegate state changes to the engine CLI; they must not independently write the state file or change power settings. Remove the Bash state-management path after command parity is verified.
 - `awake run` checks battery guard before adding its lease, starts a process-bound `caffeinate` assertion, and removes only its own lease on normal completion or catchable termination. It reconciles system state itself; it must not depend on the GUI process.
 - `SIGKILL` cannot run shell cleanup. The evaluator prunes a lease when its PID is absent, its process start identity no longer matches, or its boot-session identity is stale. Run pruning on every app evaluation and every CLI state command.
 - A pruned request releases its assertion and triggers reconciliation. If the menu-bar app is not running, the next CLI invocation performs pruning and reconciliation.
@@ -142,7 +145,7 @@ GitHub settings are not changed by repository files. They remain a maintainer ac
 ## Constraints
 
 - Current product minimum is macOS 12+. Use the legacy login-item/LaunchAgent path on macOS 12 and `SMAppService.mainApp` on macOS 13+.
-- Native Swift/AppKit and existing Bash CLI; no new network dependencies.
+- Native Swift/AppKit remains the macOS presentation layer. The cross-platform engine and CLI migration is defined in [`2026-11-21-awake-cross-platform-architecture.md`](2026-11-21-awake-cross-platform-architecture.md); no new network dependencies.
 - Local-only operation; no new network dependencies.
 - Keep the privileged command whitelist narrow.
 - Do not include the local-only root `AGENTS.md` in any commit or push.
@@ -154,14 +157,15 @@ GitHub settings are not changed by repository files. They remain a maintainer ac
 - Exact app-to-process mappings for the initial curated catalog; known apps may use catalog-specific process groups, while custom targets match the exact process identity.
 - Exact versioned schema and transition protocol for rules/leases, consistent with the shared-lock and atomic-write requirements above.
 - The exact native Settings/Get Started layouts and accessibility labels.
-- The selected lock and atomic-write implementation, including the exact manual recovery command shown in the UI and README.
+- Exact command output and UI copy for the recovery flow; state ownership, atomic writes, interprocess locking, and the `awake recover` command are defined in the cross-platform architecture spec.
 - Whether the maintainer has an Apple Developer Program identity for Developer ID signing/notarization. Public releases require signing/notarization; private previews may be unsigned.
 - Exact release architecture matrix if a universal binary proves impractical; preferred default remains universal arm64+x86_64.
 - DST behavior is set: missing boundaries use the next valid local time; repeated boundaries form one continuous interval and do not activate twice.
 - macOS minimum is set to 12+. Use the legacy login-item/LaunchAgent approach on macOS 12 and `SMAppService.mainApp` on macOS 13+, subject to implementation compatibility review.
 - Homebrew is deferred until `.dmg`/`.zip` release automation is stable.
 - Snooze/Off arbitration is set: Off applies a 30-minute Activity/Schedule Snooze; `awake run` and Manual On remain active; persistent rule changes happen in Settings.
+- Manual On is session-scoped; it ends on explicit Quit or crash and does not resume at login. Saved rules and the Snooze expiry persist.
 - Runtime model is set: the menu-bar process evaluates Activity/Schedule while running (even with its window closed); explicit Quit stops those rules; no separate helper in v1.
 - Recovery is set: next app/CLI start repairs stale state, and docs provide manual recovery; no privileged boot LaunchDaemon in v1.
-- Battery behavior is set: a low-battery transition releases the keep-awake request and notifies without terminating the command.
+- Battery behavior is set: at 20% or lower while on battery, suppress Awake's assertion, restore Awake's `SleepDisabled` change to the captured baseline, and notify without terminating the command; resume eligible active requests when the guard clears; skip the guard while on AC, and respect the user's Battery Guard toggle.
 - Automated tests and macOS CI are included in the Open Source readiness work before public release.
