@@ -1,0 +1,9 @@
+# MacAwake .gitignore
+build/
+*.o
+*.app
+.DS_Store
+/tmp/swift-module-cache
+
+# Local agent guidance must remain untracked and must not be published.
+/AGENTS.md

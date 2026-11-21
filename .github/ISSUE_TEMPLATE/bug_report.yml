@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a reproducible problem with Awake.
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For security vulnerabilities, do not use this form. Follow [SECURITY.md](https://github.com/ChuBu0012/awake/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Awake version
+      description: Include the release or commit if known.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "macOS 15.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Mac architecture
+      options:
+        - Apple Silicon
+        - Intel
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Remove private information from logs and screenshots.
+      placeholder: |
+        1. Run ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
