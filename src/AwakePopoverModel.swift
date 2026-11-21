@@ -2,10 +2,85 @@ import AppKit
 import Combine
 import Foundation
 
+// MARK: - Hardened Permission Manager for Sudoers Setup
+enum PermissionError: LocalizedError {
+    case scriptNotFound
+    case failed(String)
+    case cancelled
+
+    var errorDescription: String? {
+        switch self {
+        case .scriptNotFound: return "setup-sudoers.sh not found. Run 'make setup' in Terminal."
+        case .failed(let msg): return msg
+        case .cancelled: return "User cancelled authorization."
+        }
+    }
+}
+
+enum PermissionManager {
+    static func escapeAppleScriptString(_ str: String) -> String {
+        return str
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    static func escapeShellArg(_ str: String) -> String {
+        return "'" + str.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    static func findSetupScript() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            Bundle.main.url(forResource: "setup-sudoers", withExtension: "sh")?.path,
+            Bundle.main.resourcePath.map { "\($0)/setup-sudoers.sh" },
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/setup-sudoers.sh").path,
+            "\(home)/.local/lib/awake/setup-sudoers.sh",
+            FileManager.default.currentDirectoryPath + "/scripts/setup-sudoers.sh"
+        ].compactMap { $0 }.filter { FileManager.default.isExecutableFile(atPath: $0) || FileManager.default.fileExists(atPath: $0) }
+        return candidates.first
+    }
+
+    static func configureSudoers(completion: @escaping (Result<Void, PermissionError>) -> Void) {
+        guard let scriptPath = findSetupScript() else {
+            completion(.failure(.scriptNotFound))
+            return
+        }
+
+        let currentUser = NSUserName()
+        let escapedScriptPath = escapeShellArg(scriptPath)
+        let escapedUser = escapeShellArg(currentUser)
+        let shellCmd = "/bin/bash \(escapedScriptPath) \(escapedUser)"
+        let appleScriptCmd = "do shell script \"\(escapeAppleScriptString(shellCmd))\" with administrator privileges"
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            var error: NSDictionary?
+            if let scriptObject = NSAppleScript(source: appleScriptCmd) {
+                scriptObject.executeAndReturnError(&error)
+            } else {
+                error = [NSAppleScript.errorMessage: "Failed to initialize AppleScript engine."]
+            }
+
+            DispatchQueue.main.async {
+                if let error = error {
+                    let errStr = error[NSAppleScript.errorMessage] as? String ?? "Authorization failed"
+                    if errStr.contains("User canceled") || errStr.contains("canceled") {
+                        completion(.failure(.cancelled))
+                    } else {
+                        completion(.failure(.failed(errStr)))
+                    }
+                } else {
+                    completion(.success(()))
+                }
+            }
+        }
+    }
+}
+
 final class AwakePopoverModel: ObservableObject {
     @Published private(set) var status: AwakeStatus?
-    @Published private(set) var currentDuration = 0
+    @Published private(set) var currentDuration = 3_600
     @Published private(set) var isBusy = false
+    @Published private(set) var sudoersConfigured = false
     @Published private(set) var remainingSeconds = 0
     @Published private(set) var timeRemainingFormatted: String?
     @Published var errorMessage: String?
@@ -18,6 +93,7 @@ final class AwakePopoverModel: ObservableObject {
 
     init(bundleURL: URL = Bundle.main.bundleURL) {
         self.cliPath = Self.resolveCLIPath(bundleURL: bundleURL)
+        checkSudoersStatus()
     }
 
     deinit {
@@ -73,7 +149,7 @@ final class AwakePopoverModel: ObservableObject {
     func toggleAwake(ownerPID: Int32 = ProcessInfo.processInfo.processIdentifier) {
         guard !isBusy else { return }
 
-        if status?.active == true {
+        if status?.isManualActive == true {
             performAction(["off"])
             return
         }
@@ -101,6 +177,38 @@ final class AwakePopoverModel: ObservableObject {
         guard !isBusy else { return }
         let enabled = status?.lidSupportEnabled != true
         performAction(["set", "lid-support", enabled ? "on" : "off"])
+    }
+
+    func checkSudoersStatus() {
+        workQueue.async { [weak self] in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+            process.arguments = ["-n", "/usr/bin/pmset", "-a", "disablesleep", "0"]
+            try? process.run()
+            process.waitUntilExit()
+            let configured = (process.terminationStatus == 0)
+            DispatchQueue.main.async {
+                self?.sudoersConfigured = configured
+            }
+        }
+    }
+
+    func requestSudoersPermission(completion: ((Bool) -> Void)? = nil) {
+        PermissionManager.configureSudoers { [weak self] result in
+            switch result {
+            case .success:
+                self?.checkSudoersStatus()
+                self?.performAction(["set", "lid-support", "on"])
+                completion?(true)
+            case .failure(let error):
+                if case .cancelled = error {
+                    // User explicitly cancelled authorization prompt
+                } else {
+                    self?.errorMessage = error.localizedDescription
+                }
+                completion?(false)
+            }
+        }
     }
 
     func addAppRule(name: String, bundleID: String) {
@@ -145,7 +253,7 @@ final class AwakePopoverModel: ObservableObject {
         _ = runCLI(["session-end"])
     }
 
-    private func performAction(_ arguments: [String], completion: (() -> Void)? = nil) {
+    func performAction(_ arguments: [String], completion: (() -> Void)? = nil) {
         isBusy = true
         errorMessage = nil
         workQueue.async { [weak self] in

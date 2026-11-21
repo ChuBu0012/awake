@@ -73,10 +73,15 @@ struct AwakePopoverView: View {
             Divider()
                 .padding(.vertical, 2)
 
+            lidSupportRow
+
+            Divider()
+                .padding(.vertical, 2)
+
             footerRow
         }
         .padding(14)
-        .frame(width: 330, alignment: .top)
+        .frame(width: 340, alignment: .top)
         .onExitCommand(perform: onDismiss)
     }
 
@@ -217,11 +222,11 @@ struct AwakePopoverView: View {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    Image(systemName: isActive ? "moon.zzz.fill" : "eye.fill")
+                    Image(systemName: isManualOn ? "moon.zzz.fill" : "eye.fill")
                         .font(.body.weight(.semibold))
                 }
 
-                Text(model.isBusy ? "Updating…" : (isActive ? "Turn Off Awake" : "Turn On Awake"))
+                Text(model.isBusy ? "Updating…" : (isManualOn ? "Turn Off Awake" : "Turn On Awake"))
                     .font(.body.weight(.semibold))
 
                 Spacer()
@@ -235,9 +240,9 @@ struct AwakePopoverView: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
-        .tint(isActive ? .secondary : .accentColor)
+        .tint(isManualOn ? .secondary : .accentColor)
         .disabled(model.isBusy)
-        .accessibilityHint(isActive ? "Turns off sleep prevention" : "Prevents this Mac from sleeping")
+        .accessibilityHint(isManualOn ? "Turns off sleep prevention" : "Prevents this Mac from sleeping")
     }
 
     // MARK: - Duration Selector
@@ -328,14 +333,24 @@ struct AwakePopoverView: View {
             }
 
             if let rules = model.status?.rules, !rules.isEmpty {
-                ScrollView(.vertical, showsIndicators: rules.count > 3) {
+                if rules.count > 3 {
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(spacing: 5) {
+                            ForEach(rules, id: \.id) { rule in
+                                automationRow(rule)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .frame(maxHeight: 125)
+                } else {
                     VStack(spacing: 5) {
                         ForEach(rules, id: \.id) { rule in
                             automationRow(rule)
                         }
                     }
+                    .padding(.vertical, 2)
                 }
-                .frame(maxHeight: 120)
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "bolt.slash")
@@ -542,6 +557,53 @@ struct AwakePopoverView: View {
             .labelsHidden()
             .controlSize(.small)
             .disabled(model.isBusy)
+        }
+    }
+
+    // MARK: - Lid-Closed Support Row
+    private var lidSupportRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "laptopcomputer")
+                .font(.system(size: 14))
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text("Lid-closed Support")
+                        .font(.system(size: 12, weight: .medium))
+                    if model.sudoersConfigured {
+                        Text("Active")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.green)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.green.opacity(0.12), in: Capsule())
+                    }
+                }
+                Text("Lock sleep even when lid is closed (pmset)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            if model.sudoersConfigured {
+                Toggle("", isOn: Binding(
+                    get: { model.status?.lidSupportEnabled == true },
+                    set: { _ in model.toggleLidSupport() }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.small)
+                .disabled(model.isBusy)
+            } else {
+                Button("Grant…") {
+                    model.requestSudoersPermission()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help("Grant one-time permission to allow sleep prevention with lid closed")
+            }
         }
     }
 

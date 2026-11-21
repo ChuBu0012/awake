@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private var globalEventMonitor: Any?
 
     // Windows
+    private let settingsState = AwakeSettingsModel()
     private var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -92,15 +93,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         NSApplication.shared.terminate(nil)
     }
 
+    // MARK: - Menu Bar Fixed-Canvas Icon Generator
+    static func makeMenuBarIcon(symbolName: String) -> NSImage {
+        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+        guard let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?.withSymbolConfiguration(config) else {
+            let fallback = NSImage(size: NSSize(width: 18, height: 18))
+            fallback.isTemplate = true
+            return fallback
+        }
+        let targetSize = NSSize(width: 18, height: 18)
+        let finalImage = NSImage(size: targetSize, flipped: false) { _ in
+            let symSize = base.size
+            let origin = NSPoint(
+                x: (targetSize.width - symSize.width) / 2.0,
+                y: (targetSize.height - symSize.height) / 2.0
+            )
+            base.draw(in: NSRect(origin: origin, size: symSize))
+            return true
+        }
+        finalImage.isTemplate = true
+        return finalImage
+    }
+
     // MARK: - Status Bar Item
     private func configureStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         guard let button = statusItem.button else { return }
         button.target = self
         button.action = #selector(togglePopover)
-        let image = NSImage(systemSymbolName: "moon.zzz", accessibilityDescription: "Awake")
-        image?.isTemplate = true
-        button.image = image
+        button.image = AppDelegate.makeMenuBarIcon(symbolName: "moon.zzz")
         button.setAccessibilityLabel("Awake")
         button.setAccessibilityHelp("Show Awake status and controls")
         button.toolTip = "Awake"
@@ -108,11 +129,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     // MARK: - Popover Configuration
     final class PopoverHostingController<Content: View>: NSHostingController<Content> {
+        var onFittingSizeChange: ((NSSize) -> Void)?
+
         override func viewDidLayout() {
             super.viewDidLayout()
             let fitting = view.fittingSize
             if fitting.width > 0 && fitting.height > 0 {
                 preferredContentSize = fitting
+                onFittingSizeChange?(fitting)
             }
         }
     }
@@ -128,16 +152,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                 model: model,
                 onOpenSettings: { [weak self] in
                     self?.popover.performClose(nil)
-                    self?.showSettingsWindow()
+                    self?.showSettingsWindow(tab: .general)
                 },
-                onAddApp: { [weak self] in self?.addAppRule() },
-                onAddProcess: { [weak self] in self?.addProcessRule() },
-                onAddSchedule: { [weak self] in self?.addScheduleRule() },
+                onAddApp: { [weak self] in
+                    self?.popover.performClose(nil)
+                    self?.showSettingsWindow(tab: .automations, openAddRuleType: 0)
+                },
+                onAddProcess: { [weak self] in
+                    self?.popover.performClose(nil)
+                    self?.showSettingsWindow(tab: .automations, openAddRuleType: 1)
+                },
+                onAddSchedule: { [weak self] in
+                    self?.popover.performClose(nil)
+                    self?.showSettingsWindow(tab: .automations, openAddRuleType: 2)
+                },
                 onDismiss: { [weak self] in self?.popover.performClose(nil) }
             )
         )
+        controller.onFittingSizeChange = { [weak self] size in
+            guard let self = self, self.popover.isShown else { return }
+            self.popover.contentSize = size
+        }
         popover.contentViewController = controller
-        popover.contentSize = NSSize(width: 330, height: 380)
+        popover.contentSize = NSSize(width: 340, height: 460)
     }
 
     func popoverDidClose(_ notification: Notification) {
@@ -158,12 +195,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             iconName = "moon.zzz"
         }
 
-        let image = NSImage(
-            systemSymbolName: iconName,
-            accessibilityDescription: active ? "Awake active" : "Awake inactive"
-        )
-        image?.isTemplate = true
+        let image = AppDelegate.makeMenuBarIcon(symbolName: iconName)
         statusItem.button?.image = image
+        statusItem.button?.setAccessibilityLabel(active ? "Awake active" : "Awake inactive")
     }
 
     @objc private func togglePopover() {
@@ -184,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         if let controller = popover.contentViewController {
             let fitting = controller.view.fittingSize
             if fitting.width > 0 && fitting.height > 0 {
-                popover.contentSize = NSSize(width: 330, height: max(340, min(500, fitting.height)))
+                popover.contentSize = fitting
             }
         }
         showPopover(relativeTo: button)
@@ -214,22 +248,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     }
 
     // MARK: - Windows Management
-    func showSettingsWindow() {
+    func showSettingsWindow(tab: AwakeSettingsModel.SettingsTab = .general, openAddRuleType: Int? = nil) {
+        settingsState.selectedTab = tab
+        if let type = openAddRuleType {
+            settingsState.addRuleType = type
+            settingsState.showingAddRuleSheet = true
+            if type == 1 {
+                settingsState.scanRunningProcesses()
+            }
+        }
+
         if let window = settingsWindow {
             window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
             NSApplication.shared.activate(ignoringOtherApps: true)
             return
         }
 
         let settingsView = AwakeSettingsView(
             model: model,
-            onAddApp: { [weak self] in self?.addAppRule() },
-            onAddProcess: { [weak self] in self?.addProcessRule() },
-            onAddSchedule: { [weak self] in self?.addScheduleRule() }
+            settingsState: settingsState,
+            onAddApp: { [weak self] in self?.addAppRule() }
         )
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 530, height: 470),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 500),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -281,91 +324,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         if wasPopoverShown, let button = statusItem.button {
             showPopover(relativeTo: button)
         }
-    }
-
-    private func addProcessRule() {
-        let wasPopoverShown = popover.isShown
-        popover.performClose(nil)
-        guard let values = prompt(
-            title: "Watch a Work Process",
-            message: "Enter the process name (for example: node, docker, python3). Awake keeps your Mac awake while this process is running.",
-            fields: ["Process name (e.g. node)"]
-        ) else {
-            if wasPopoverShown, let button = statusItem.button {
-                showPopover(relativeTo: button)
-            }
-            return
-        }
-
-        let name = values[0].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else {
-            if wasPopoverShown, let button = statusItem.button {
-                showPopover(relativeTo: button)
-            }
-            return
-        }
-        model.addProcessRule(name: name)
-        if wasPopoverShown, let button = statusItem.button {
-            showPopover(relativeTo: button)
-        }
-    }
-
-    private func addScheduleRule() {
-        let wasPopoverShown = popover.isShown
-        popover.performClose(nil)
-        guard let values = prompt(
-            title: "Add a Weekly Schedule",
-            message: "Enter weekdays and 24-hour times separated by space.\nExample: mon,tue,wed,thu,fri 22:00 06:00",
-            fields: ["Weekdays start end"],
-            defaults: ["mon,tue,wed,thu,fri 22:00 06:00"]
-        ) else {
-            if wasPopoverShown, let button = statusItem.button {
-                showPopover(relativeTo: button)
-            }
-            return
-        }
-
-        let parts = values[0].split(whereSeparator: \.isWhitespace).map(String.init)
-        guard parts.count == 3 else {
-            model.errorMessage = "Invalid format. Expected: mon,tue,wed,thu,fri 22:00 06:00"
-            if wasPopoverShown, let button = statusItem.button {
-                showPopover(relativeTo: button)
-            }
-            return
-        }
-        model.addScheduleRule(days: parts[0], start: parts[1], end: parts[2])
-        if wasPopoverShown, let button = statusItem.button {
-            showPopover(relativeTo: button)
-        }
-    }
-
-    private func prompt(title: String, message: String, fields: [String], defaults: [String] = []) -> [String]? {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.addButton(withTitle: "Add")
-        alert.addButton(withTitle: "Cancel")
-
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.spacing = 8
-        stack.frame = NSRect(x: 0, y: 0, width: 300, height: max(32, fields.count * 34))
-
-        var inputs: [NSTextField] = []
-        for (index, placeholder) in fields.enumerated() {
-            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-            field.placeholderString = placeholder
-            if index < defaults.count && !defaults[index].isEmpty {
-                field.stringValue = defaults[index]
-            }
-            inputs.append(field)
-            stack.addArrangedSubview(field)
-        }
-        alert.accessoryView = stack
-
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        return inputs.map(\.stringValue)
     }
 }
 
