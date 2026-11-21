@@ -54,12 +54,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.toolTip = "Awake"
     }
 
+final class PopoverHostingController<Content: View>: NSHostingController<Content> {
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        let fitting = view.fittingSize
+        if fitting.width > 0 && fitting.height > 0 {
+            preferredContentSize = fitting
+        }
+    }
+}
+
     private func configurePopover() {
         popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
-        popover.contentSize = NSSize(width: 360, height: 490)
-        popover.contentViewController = NSHostingController(
+        let controller = PopoverHostingController(
             rootView: AwakePopoverView(
                 model: model,
                 onOpenSettings: { [weak self] in
@@ -72,6 +81,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onDismiss: { [weak self] in self?.popover.performClose(nil) }
             )
         )
+        popover.contentViewController = controller
+        let fitting = controller.view.fittingSize
+        popover.contentSize = (fitting.width > 0 && fitting.height > 0) ? fitting : NSSize(width: 320, height: 280)
     }
 
     private func updateStatusItem(for status: AwakeStatus?) {
@@ -88,6 +100,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.performClose(nil)
         } else {
             model.refresh()
+            if let controller = popover.contentViewController {
+                let fitting = controller.view.fittingSize
+                if fitting.width > 0 && fitting.height > 0 {
+                    popover.contentSize = fitting
+                }
+            }
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
     }

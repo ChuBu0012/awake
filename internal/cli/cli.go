@@ -82,8 +82,13 @@ func (c *CLI) Run(ctx context.Context, args []string) error {
 		if len(args) != 0 {
 			return fmt.Errorf("usage: awake recover")
 		}
+		if err := c.coordinator.Recover(ctx); err != nil {
+			return err
+		}
 		_, err := c.coordinator.Tick(ctx)
 		return err
+	case "test", "verify":
+		return c.verify(ctx)
 	case "stop-automation":
 		if len(args) != 0 {
 			return fmt.Errorf("usage: awake stop-automation")
@@ -403,9 +408,37 @@ func statusFrom(state domain.State, evaluation domain.Evaluation) Status {
 		SnoozedUntil:      state.SnoozeUntil,
 		Requests:          append([]domain.Lease{}, evaluation.Requests...),
 		Rules:             append([]domain.Rule{}, state.Rules...),
-		RecoveryPending:   state.SleepDisabledBaseline != nil || state.RecoveryWarning != "" || state.LegacyAssertionPID != nil,
+		RecoveryPending:   state.SleepDisabledBaseline != nil || state.LegacyAssertionPID != nil,
 		RecoveryWarning:   state.RecoveryWarning,
 	}
+}
+
+func (c *CLI) verify(ctx context.Context) error {
+	state, err := c.coordinator.Read()
+	if err != nil {
+		return err
+	}
+	evaluation, err := c.coordinator.Tick(ctx)
+	if err != nil {
+		return err
+	}
+	status := statusFrom(state, evaluation)
+	fmt.Fprintln(c.stdout, "Awake System Sleep Verification:")
+	if status.Active {
+		fmt.Fprintln(c.stdout, "  Status: ACTIVE (macOS is currently prevented from sleeping)")
+	} else {
+		fmt.Fprintln(c.stdout, "  Status: INACTIVE (normal system sleep behavior)")
+	}
+	fmt.Fprintln(c.stdout, "  Native Engine: /usr/bin/caffeinate (runs without root or sudo permissions)")
+	fmt.Fprintf(c.stdout, "  Active Requests: %d\n", len(status.Requests))
+	for _, req := range status.Requests {
+		fmt.Fprintf(c.stdout, "    - %s (%s)\n", req.Reason, req.Source)
+	}
+	fmt.Fprintf(c.stdout, "  Active Rules: %d\n", len(status.Rules))
+	fmt.Fprintln(c.stdout, "  Clamshell Support (Lid-closed): sudo /usr/bin/pmset -a disablesleep 0|1")
+	fmt.Fprintln(c.stdout, "To inspect live macOS kernel power assertions directly, run:")
+	fmt.Fprintln(c.stdout, "  pmset -g assertions")
+	return nil
 }
 
 func (c *CLI) printEvaluation(evaluation domain.Evaluation) {

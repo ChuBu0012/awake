@@ -61,9 +61,6 @@ struct AwakePopoverView: View {
             } label: {
                 Label(isManualOn ? "Turn Off Awake" : "Turn On Awake", systemImage: isManualOn ? "moon.zzz.fill" : "eye.fill")
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .id(isManualOn)
-                    .transition(reduceMotion ? .identity : .opacity)
-                    .animation(motion, value: isManualOn)
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut("t", modifiers: .command)
@@ -164,9 +161,8 @@ struct AwakePopoverView: View {
             }
         }
         .padding(16)
-        .frame(width: 360)
+        .frame(width: 320, alignment: .top)
         .onExitCommand(perform: onDismiss)
-        .animation(motion, value: model.status?.active)
     }
 
     private var statusHeader: some View {
@@ -180,17 +176,11 @@ struct AwakePopoverView: View {
                 Text(statusTitle)
                     .font(.headline)
                     .foregroundColor(.primary)
-                    .id(statusTitle)
-                    .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
-                    .animation(motion, value: statusTitle)
                 Text(statusDetail)
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                    .id(statusDetail)
-                    .transition(reduceMotion ? .identity : .opacity)
-                    .animation(motion, value: statusDetail)
             }
             Spacer(minLength: 0)
 
@@ -204,7 +194,6 @@ struct AwakePopoverView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
-        .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
         .accessibilityElement(children: .contain)
     }
 

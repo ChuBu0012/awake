@@ -158,6 +158,24 @@ func (c *Coordinator) StopAutomation(ctx context.Context) error {
 	})
 }
 
+func (c *Coordinator) Recover(ctx context.Context) error {
+	return c.state.Update(ctx, func(state *domain.State) error {
+		if state.SleepDisabledBaseline != nil {
+			if state.SleepDisabledApplied != nil {
+				current, err := c.adapter.ReadSleepDisabled(ctx)
+				if err == nil && current == *state.SleepDisabledApplied {
+					_ = c.adapter.SetSleepDisabled(ctx, *state.SleepDisabledBaseline)
+				}
+			}
+			state.SleepDisabledBaseline = nil
+			state.SleepDisabledApplied = nil
+		}
+		state.LegacyAssertionPID = nil
+		state.RecoveryWarning = ""
+		return nil
+	})
+}
+
 // EndSession detaches the menu bar app without snoozing schedules or Activity
 // rules. Explicit command leases remain owned by their command processes.
 func (c *Coordinator) EndSession(ctx context.Context) error {
