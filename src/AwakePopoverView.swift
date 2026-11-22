@@ -612,7 +612,7 @@ struct AwakePopoverView: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
-                    Text("Lid-closed Support")
+                    Text("Stay Awake When Lid Closed")
                         .font(.system(size: 12, weight: .medium))
                     if model.sudoersConfigured && model.status?.lidSupportEnabled == true && isActive {
                         Text("Active")
@@ -623,7 +623,7 @@ struct AwakePopoverView: View {
                             .background(Color.green.opacity(0.12), in: Capsule())
                     }
                 }
-                Text("Lock sleep even when lid is closed (pmset)")
+                Text("Keep tasks running even when you fold your MacBook screen")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
@@ -640,12 +640,12 @@ struct AwakePopoverView: View {
                 .controlSize(.small)
                 .disabled(model.isBusy)
             } else {
-                Button("Grant…") {
+                Button("Setup…") {
                     model.requestSudoersPermission()
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .help("Grant one-time permission to allow sleep prevention with lid closed")
+                .help("Grant one-time permission to allow tasks to continue when folding your MacBook screen")
             }
         }
     }

@@ -191,45 +191,97 @@ extension AwakeSettingsView {
 
                     // 2. Currently Running Processes on this Mac
                     if !settingsState.runningProcesses.isEmpty {
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text("RUNNING ON YOUR MAC")
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Text("RUNNING ON YOUR MAC (\(settingsState.runningProcesses.count))")
                                     .font(.system(size: 10, weight: .bold))
                                     .foregroundColor(.secondary)
-                                Spacer()
-                                Button("Rescan") {
-                                    settingsState.scanRunningProcesses()
-                                }
-                                .font(.system(size: 10))
-                            }
 
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 5) {
-                                    ForEach(settingsState.runningProcesses.prefix(18), id: \.self) { proc in
-                                        let isSelected = settingsState.newProcessName == proc
+                                Spacer()
+
+                                HStack(spacing: 4) {
+                                    Image(systemName: "magnifyingglass")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(.secondary)
+                                    TextField("Search process…", text: $settingsState.processSearchText)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 10))
+                                        .frame(width: 120)
+                                    if !settingsState.processSearchText.isEmpty {
                                         Button {
-                                            settingsState.newProcessName = proc
-                                            if settingsState.newProcessDisplayName.isEmpty {
-                                                settingsState.newProcessDisplayName = proc
-                                            }
+                                            settingsState.processSearchText = ""
                                         } label: {
-                                            HStack(spacing: 4) {
-                                                Circle()
-                                                    .fill(Color.green)
-                                                    .frame(width: 5, height: 5)
-                                                Text(proc)
-                                                    .font(.system(size: 10, design: .monospaced))
-                                            }
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 3)
-                                            .background(
-                                                isSelected ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05),
-                                                in: Capsule()
-                                            )
+                                            Image(systemName: "xmark.circle.fill")
+                                                .font(.system(size: 9))
+                                                .foregroundColor(.secondary)
                                         }
                                         .buttonStyle(.plain)
                                     }
                                 }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 5))
+
+                                Button("Rescan") {
+                                    settingsState.scanRunningProcesses()
+                                }
+                                .font(.system(size: 10))
+                                .buttonStyle(.plain)
+                                .foregroundColor(.secondary)
+                            }
+
+                            let filtered = settingsState.filteredRunningProcesses
+                            if filtered.isEmpty {
+                                HStack {
+                                    Spacer()
+                                    Text("No running processes match \"\(settingsState.processSearchText)\"")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                }
+                                .padding(.vertical, 14)
+                                .background(Color.primary.opacity(0.02), in: RoundedRectangle(cornerRadius: 6))
+                            } else {
+                                ScrollView(.vertical) {
+                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 125), spacing: 5)], spacing: 5) {
+                                        ForEach(filtered, id: \.self) { proc in
+                                            let isSelected = settingsState.newProcessName == proc
+                                            Button {
+                                                settingsState.newProcessName = proc
+                                                if settingsState.newProcessDisplayName.isEmpty {
+                                                    settingsState.newProcessDisplayName = proc
+                                                }
+                                            } label: {
+                                                HStack(spacing: 4) {
+                                                    Circle()
+                                                        .fill(isSelected ? Color.accentColor : Color.green)
+                                                        .frame(width: 5, height: 5)
+                                                    Text(proc)
+                                                        .font(.system(size: 10, design: .monospaced))
+                                                        .foregroundColor(isSelected ? .primary : .secondary)
+                                                        .lineLimit(1)
+                                                        .truncationMode(.middle)
+                                                    Spacer(minLength: 0)
+                                                }
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 4)
+                                                .background(
+                                                    isSelected ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.04),
+                                                    in: RoundedRectangle(cornerRadius: 5)
+                                                )
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 5)
+                                                        .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1)
+                                                )
+                                            }
+                                            .buttonStyle(.plain)
+                                            .help("Select \(proc)")
+                                        }
+                                    }
+                                    .padding(4)
+                                }
+                                .frame(height: 82)
+                                .background(Color.primary.opacity(0.02), in: RoundedRectangle(cornerRadius: 6))
                             }
                         }
                     }

@@ -269,7 +269,7 @@ func defaultState() domain.State {
 	return domain.State{
 		SchemaVersion:       domain.CurrentSchemaVersion,
 		BatteryGuardEnabled: true,
-		LidSupportEnabled:   true,
+		LidSupportEnabled:   false,
 	}
 }
 

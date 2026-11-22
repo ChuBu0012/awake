@@ -360,6 +360,15 @@ final class AwakeSettingsModel: ObservableObject {
     }
 
     @Published var runningProcesses: [String] = []
+    @Published var processSearchText: String = ""
+
+    var filteredRunningProcesses: [String] {
+        let query = processSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if query.isEmpty {
+            return runningProcesses
+        }
+        return runningProcesses.filter { $0.lowercased().contains(query) }
+    }
 
     func scanRunningProcesses() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in

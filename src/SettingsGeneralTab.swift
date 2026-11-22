@@ -131,16 +131,16 @@ extension AwakeSettingsView {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
-                            Text("Lid-closed Support (Clamshell)")
+                            Text("Stay Awake When Lid Closed")
                                 .font(.body.weight(.medium))
-                            Text(settingsState.sudoersConfigured ? (model.status?.lidSupportEnabled == true ? (model.status?.active == true ? "✓ Active" : "✓ Enabled") : "✓ Configured") : "Setup Needed")
+                            Text(settingsState.sudoersConfigured ? (model.status?.lidSupportEnabled == true ? (model.status?.active == true ? "✓ Active" : "✓ Enabled") : "Disabled") : "Setup Required")
                                 .font(.system(size: 9, weight: .bold))
-                                .foregroundColor(settingsState.sudoersConfigured ? .green : .orange)
+                                .foregroundColor(settingsState.sudoersConfigured && model.status?.lidSupportEnabled == true ? .green : .secondary)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
-                                .background(settingsState.sudoersConfigured ? Color.green.opacity(0.12) : Color.orange.opacity(0.12), in: Capsule())
+                                .background(settingsState.sudoersConfigured && model.status?.lidSupportEnabled == true ? Color.green.opacity(0.12) : Color.primary.opacity(0.06), in: Capsule())
                         }
-                        Text("Allows keeping Mac awake when closing the lid without password prompts")
+                        Text("Allow background downloads, builds, and AI tasks to continue running when your MacBook lid is closed")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
