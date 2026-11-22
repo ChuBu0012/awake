@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import Foundation
-import UserNotifications
 
 // MARK: - Hardened Permission Manager for Sudoers Setup
 enum PermissionError: LocalizedError {
@@ -126,24 +125,6 @@ final class AwakePopoverModel: ObservableObject {
             if status?.active == true {
                 performAction(["off"])
             }
-            Self.sendNotification(
-                title: "⚠️ Awake: Thermal Guard Activated",
-                body: "Mac temperature is high. Sleep prevention paused to protect hardware and battery."
-            )
-        }
-    }
-
-    static func sendNotification(title: String, subtitle: String? = nil, body: String) {
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
-            guard granted else { return }
-            let content = UNMutableNotificationContent()
-            content.title = title
-            if let sub = subtitle { content.subtitle = sub }
-            content.body = body
-            content.sound = .default
-            let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-            center.add(request, withCompletionHandler: nil)
         }
     }
 
@@ -180,20 +161,10 @@ final class AwakePopoverModel: ObservableObject {
                 self.needsRefreshAgain = false
 
                 if let decoded {
-                    let wasActive = self.status?.active == true
-                    let isNowActive = decoded.active
                     if StatusUpdatePolicy.shouldPublish(previous: self.status, next: decoded) {
                         self.status = decoded
                     }
                     self.updateRemainingDuration(from: decoded)
-
-                    // Native macOS Notification when active task completes
-                    if wasActive && !isNowActive && !decoded.batterySuppressed && !self.isThermalThrottled {
-                        Self.sendNotification(
-                            title: "Awake: Task Complete",
-                            body: "All tasks finished. Your Mac is now returning to normal sleep."
-                        )
-                    }
                 }
 
                 if shouldRerun {
