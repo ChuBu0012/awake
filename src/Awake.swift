@@ -17,6 +17,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Enforce single instance: prevent duplicate status bar icons
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.most-too.Awake"
+        let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        let otherInstances = runningApps.filter { $0.processIdentifier != myPID }
+
+        if let existing = otherInstances.first {
+            existing.activate(options: [.activateIgnoringOtherApps])
+            NSApplication.shared.terminate(nil)
+            return
+        }
+
         NSApplication.shared.setActivationPolicy(.accessory)
         configureMainMenu()
         configureStatusItem()
@@ -25,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         statusObservation = model.$status.sink { [weak self] status in
             self?.updateStatusItem(for: status)
         }
+        updateStatusItem(for: model.status)
 
         model.refresh()
         let refreshTimer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
@@ -34,9 +47,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         self.timer = refreshTimer
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        togglePopover()
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
         stopEventMonitor()
+        if let item = statusItem {
+            NSStatusBar.system.removeStatusItem(item)
+        }
         model.endSession()
     }
 
@@ -127,7 +148,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         guard let button = statusItem.button else { return }
         button.target = self
-        button.action = #selector(togglePopover)
+        button.action = #selector(statusBarButtonClicked(_:))
+        button.sendAction(on: [.leftMouseDown, .rightMouseDown])
         button.image = AppDelegate.makeMenuBarIcon(symbolName: "moon.zzz")
         button.imagePosition = .imageOnly
         button.setAccessibilityLabel("Awake")
@@ -204,6 +226,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         statusItem.button?.setAccessibilityLabel(active ? "Awake active" : "Awake inactive")
     }
 
+    @objc private func statusBarButtonClicked(_ sender: NSStatusBarButton) {
+        togglePopover()
+    }
+
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
         let now = ProcessInfo.processInfo.systemUptime
@@ -220,6 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
         model.refresh()
         if let controller = popover.contentViewController {
+            controller.view.layoutSubtreeIfNeeded()
             let fitting = controller.view.fittingSize
             if fitting.width > 0 && fitting.height > 0 {
                 popover.contentSize = NSSize(width: 340, height: ceil(fitting.height))
@@ -238,6 +265,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         if globalEventMonitor != nil { return }
         globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             guard let self = self, self.popover.isShown else { return }
+            // If the click is inside the status item button, let the button action handle it
+            if let button = self.statusItem?.button, let window = button.window {
+                let screenRect = window.convertToScreen(button.bounds)
+                if screenRect.contains(NSEvent.mouseLocation) {
+                    return
+                }
+            }
             DispatchQueue.main.async {
                 self.popover.performClose(nil)
             }
