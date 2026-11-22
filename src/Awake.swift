@@ -166,10 +166,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                     self?.popover.performClose(nil)
                     self?.showSettingsWindow(tab: .automations, openAddRuleType: 1)
                 },
-                onAddSchedule: { [weak self] in
-                    self?.popover.performClose(nil)
-                    self?.showSettingsWindow(tab: .automations, openAddRuleType: 2)
-                },
                 onDismiss: { [weak self] in self?.popover.performClose(nil) }
             )
         )

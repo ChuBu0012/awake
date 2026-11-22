@@ -361,34 +361,6 @@ final class AwakeSettingsModel: ObservableObject {
 
     @Published var runningProcesses: [String] = []
 
-    // Schedule UI State
-    @Published var selectedDays: Set<String> = ["mon", "tue", "wed", "thu", "fri"]
-    @Published var startHour: Int = 22
-    @Published var startMinute: Int = 0
-    @Published var endHour: Int = 6
-    @Published var endMinute: Int = 0
-
-    var formattedDays: String {
-        let order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-        let active = order.filter { selectedDays.contains($0) }
-        return active.isEmpty ? "mon,tue,wed,thu,fri" : active.joined(separator: ",")
-    }
-
-    var formattedStart: String {
-        String(format: "%02d:%02d", startHour, startMinute)
-    }
-
-    var formattedEnd: String {
-        String(format: "%02d:%02d", endHour, endMinute)
-    }
-
-    var scheduleSummary: String {
-        let order = [("mon", "Mon"), ("tue", "Tue"), ("wed", "Wed"), ("thu", "Thu"), ("fri", "Fri"), ("sat", "Sat"), ("sun", "Sun")]
-        let dayNames = order.filter { selectedDays.contains($0.0) }.map { $0.1 }.joined(separator: ", ")
-        let daysDesc = dayNames.isEmpty ? "No days selected" : dayNames
-        return "\(daysDesc) • \(formattedStart) – \(formattedEnd)"
-    }
-
     func scanRunningProcesses() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let process = Process()

@@ -108,7 +108,6 @@ extension AwakeSettingsView {
             Picker("", selection: $settingsState.addRuleType) {
                 Text("Application").tag(0)
                 Text("Work Process").tag(1)
-                Text("Weekly Schedule").tag(2)
             }
             .pickerStyle(.segmented)
             .onChange(of: settingsState.addRuleType) { type in
@@ -137,7 +136,7 @@ extension AwakeSettingsView {
                     Spacer().frame(height: 10)
                 }
                 .padding(.vertical, 8)
-            } else if settingsState.addRuleType == 1 {
+            } else {
                 VStack(alignment: .leading, spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Watch a Background Process")
@@ -273,189 +272,6 @@ extension AwakeSettingsView {
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(settingsState.newProcessName.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Add Weekly Schedule")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Awake keeps your Mac awake automatically during defined recurring times.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    // 1. Day Selection
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("ACTIVE DAYS")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Button("Weekdays") {
-                                settingsState.selectedDays = ["mon", "tue", "wed", "thu", "fri"]
-                            }
-                            .buttonStyle(.borderless)
-                            .font(.system(size: 10))
-
-                            Text("•").foregroundColor(.secondary).font(.caption2)
-
-                            Button("Everyday") {
-                                settingsState.selectedDays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-                            }
-                            .buttonStyle(.borderless)
-                            .font(.system(size: 10))
-
-                            Text("•").foregroundColor(.secondary).font(.caption2)
-
-                            Button("Weekends") {
-                                settingsState.selectedDays = ["sat", "sun"]
-                            }
-                            .buttonStyle(.borderless)
-                            .font(.system(size: 10))
-                        }
-
-                        HStack(spacing: 5) {
-                            ForEach([
-                                ("mon", "Mon"),
-                                ("tue", "Tue"),
-                                ("wed", "Wed"),
-                                ("thu", "Thu"),
-                                ("fri", "Fri"),
-                                ("sat", "Sat"),
-                                ("sun", "Sun")
-                            ], id: \.0) { dayKey, dayLabel in
-                                let isSelected = settingsState.selectedDays.contains(dayKey)
-                                Button {
-                                    if isSelected {
-                                        if settingsState.selectedDays.count > 1 {
-                                            settingsState.selectedDays.remove(dayKey)
-                                        }
-                                    } else {
-                                        settingsState.selectedDays.insert(dayKey)
-                                    }
-                                } label: {
-                                    Text(dayLabel)
-                                        .font(.system(size: 11, weight: isSelected ? .bold : .regular))
-                                        .foregroundColor(isSelected ? .white : .primary)
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 6)
-                                        .background(
-                                            isSelected ? Color.accentColor : Color.primary.opacity(0.04),
-                                            in: RoundedRectangle(cornerRadius: 6)
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-
-                    // 2. Time Window
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("TIME WINDOW")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Button("Overnight") {
-                                settingsState.startHour = 22; settingsState.startMinute = 0
-                                settingsState.endHour = 6; settingsState.endMinute = 0
-                            }
-                            .buttonStyle(.borderless)
-                            .font(.system(size: 10))
-
-                            Text("•").foregroundColor(.secondary).font(.caption2)
-
-                            Button("Workday") {
-                                settingsState.startHour = 9; settingsState.startMinute = 0
-                                settingsState.endHour = 18; settingsState.endMinute = 0
-                            }
-                            .buttonStyle(.borderless)
-                            .font(.system(size: 10))
-
-                            Text("•").foregroundColor(.secondary).font(.caption2)
-
-                            Button("All Day") {
-                                settingsState.startHour = 0; settingsState.startMinute = 0
-                                settingsState.endHour = 23; settingsState.endMinute = 59
-                            }
-                            .buttonStyle(.borderless)
-                            .font(.system(size: 10))
-                        }
-
-                        HStack(spacing: 12) {
-                            HStack(spacing: 4) {
-                                Text("Start:").font(.caption.weight(.medium)).foregroundColor(.secondary)
-                                Picker("", selection: $settingsState.startHour) {
-                                    ForEach(0..<24, id: \.self) { h in
-                                        Text(String(format: "%02d", h)).tag(h)
-                                    }
-                                }
-                                .frame(width: 52)
-                                Text(":")
-                                Picker("", selection: $settingsState.startMinute) {
-                                    ForEach([0, 15, 30, 45], id: \.self) { m in
-                                        Text(String(format: "%02d", m)).tag(m)
-                                    }
-                                }
-                                .frame(width: 52)
-                            }
-
-                            Image(systemName: "arrow.right")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-
-                            HStack(spacing: 4) {
-                                Text("End:").font(.caption.weight(.medium)).foregroundColor(.secondary)
-                                Picker("", selection: $settingsState.endHour) {
-                                    ForEach(0..<24, id: \.self) { h in
-                                        Text(String(format: "%02d", h)).tag(h)
-                                    }
-                                }
-                                .frame(width: 52)
-                                Text(":")
-                                Picker("", selection: $settingsState.endMinute) {
-                                    ForEach([0, 15, 30, 45, 59], id: \.self) { m in
-                                        Text(String(format: "%02d", m)).tag(m)
-                                    }
-                                }
-                                .frame(width: 52)
-                            }
-                        }
-                        .padding(8)
-                        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
-                    }
-
-                    // 3. Live Summary
-                    HStack(spacing: 8) {
-                        Image(systemName: "clock.badge.checkmark")
-                            .font(.body)
-                            .foregroundColor(.accentColor)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(settingsState.scheduleSummary)
-                                .font(.system(size: 11, weight: .semibold))
-                            Text("Mac will stay awake automatically during this recurring window.")
-                                .font(.system(size: 9))
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(8)
-                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-
-                    HStack {
-                        Spacer()
-                        Button("Cancel") { settingsState.showingAddRuleSheet = false }
-                        Button("Add Schedule Rule") {
-                            model.addScheduleRule(
-                                days: settingsState.formattedDays,
-                                start: settingsState.formattedStart,
-                                end: settingsState.formattedEnd
-                            )
-                            settingsState.showingAddRuleSheet = false
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(settingsState.selectedDays.isEmpty)
                     }
                 }
             }

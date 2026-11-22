@@ -291,15 +291,6 @@ final class AwakePopoverModel: ObservableObject {
         performAction(args)
     }
 
-    func addScheduleRule(days: String, start: String, end: String) {
-        guard !isBusy else { return }
-        let cleanDays = days.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanStart = start.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanEnd = end.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ruleID = "schedule-\(UUID().uuidString.lowercased())"
-        performAction(["rule", "schedule", ruleID, "Schedule (\(cleanDays))", cleanDays, cleanStart, cleanEnd])
-    }
-
     func performRuleAction(_ action: String, ruleID: String) {
         guard !isBusy else { return }
         performAction(["rule", action, ruleID])
