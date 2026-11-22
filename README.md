@@ -66,19 +66,33 @@
 
 ---
 
-### First Launch Note (Gatekeeper)
+### Security & First Launch (Gatekeeper)
 
-Because Awake is an open-source project distributed independently without a paid Apple Developer certificate, macOS Gatekeeper may show a warning on first launch:
+#### Why does macOS show a security warning?
+
+When you download Awake from GitHub or the web, macOS automatically flags it with an internet quarantine attribute (`com.apple.quarantine`). 
+
+By default, Apple's Gatekeeper system requires distributed Mac apps to be signed with a paid Apple Developer ID certificate ($99/year) and notarized by Apple's cloud servers. Because **Awake is a 100% free, independent open-source project**, it is signed with a standard local Ad-hoc signature rather than a paid Apple license.
+
+As a result, macOS displays a generic alert:
 > *"Awake cannot be opened because Apple cannot check it for malicious software"* or *"Awake is from an unidentified developer"*.
 
-**To open Awake on first launch (one-time only):**
-1. Open your **`/Applications`** folder in Finder.
-2. **Right-click** (or <kbd>Control</kbd>-click) **`Awake.app`** and select **Open**.
-3. In the dialog, click **Open**.
+**This is a standard macOS Gatekeeper check for unsigned open-source software, not a security vulnerability.**
 
-> **For macOS 15 Sequoia (if "Open" is not present in the right-click menu):**
-> - Go to **System Settings > Privacy & Security**, scroll down to **Security**, and click **"Open Anyway"**.
-> - Or clear the quarantine attribute via Terminal:
+#### Our Security & Privacy Guarantees
+- **100% Auditable Code:** Every line of Awake is open source in this repository under the MIT license. You can inspect, audit, or build it yourself.
+- **Zero Sudo for Everyday Use:** Standard sleep prevention relies on Apple's native `/usr/bin/caffeinate` tool running entirely under your regular user permissions.
+- **Narrow Sudoers Scope:** If you enable lid-closed support, Awake only requests permission to run two explicit commands (`pmset -a disablesleep 0` and `1`). It cannot run arbitrary shell commands or access user data.
+- **Completely Offline:** Zero telemetry, zero analytics, zero external network requests.
+
+#### How to open Awake on first launch (one-time only):
+1. In Finder, open your **`/Applications`** folder.
+2. **Right-click** (or <kbd>Control</kbd>-click) **`Awake.app`** and select **Open**.
+3. In the confirmation dialog, click **Open**.
+
+> **For macOS 15 Sequoia (if "Open" does not appear in the right-click menu):**
+> - Go to **System Settings > Privacy & Security**, scroll down to the **Security** section, and click **"Open Anyway"**.
+> - Or remove the quarantine attribute directly via Terminal (one command):
 >   ```bash
 >   xattr -cr /Applications/Awake.app
 >   ```
