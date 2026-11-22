@@ -193,6 +193,51 @@ final class AwakeSettingsModel: ObservableObject {
     @Published var newProcessName: String = ""
     @Published var newProcessDisplayName: String = ""
 
+    // Installed Applications Scanner for Add Rule
+    struct InstalledAppItem: Identifiable, Hashable {
+        let id: String
+        let name: String
+        let bundleID: String
+        let path: String
+    }
+
+    @Published var installedApps: [InstalledAppItem] = []
+    @Published var appSearchText: String = ""
+
+    var filteredInstalledApps: [InstalledAppItem] {
+        let query = appSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if query.isEmpty {
+            return installedApps
+        }
+        return installedApps.filter { $0.name.lowercased().contains(query) || $0.bundleID.lowercased().contains(query) }
+    }
+
+    func scanInstalledApps() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let fm = FileManager.default
+            let dirs = ["/Applications", "/System/Applications", "\(NSHomeDirectory())/Applications"]
+            var items: [InstalledAppItem] = []
+            var seenIDs = Set<String>()
+
+            for dir in dirs {
+                guard let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+                for item in contents where item.hasSuffix(".app") {
+                    let fullPath = (dir as NSString).appendingPathComponent(item)
+                    guard let bundle = Bundle(path: fullPath),
+                          let bundleID = bundle.bundleIdentifier,
+                          !seenIDs.contains(bundleID) else { continue }
+                    seenIDs.insert(bundleID)
+                    let displayName = fm.displayName(atPath: fullPath).replacingOccurrences(of: ".app", with: "")
+                    items.append(InstalledAppItem(id: bundleID, name: displayName, bundleID: bundleID, path: fullPath))
+                }
+            }
+            let sorted = items.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            DispatchQueue.main.async {
+                self?.installedApps = sorted
+            }
+        }
+    }
+
     // Process Presets & Live Scanner
     struct ProcessPreset: Identifiable {
         let id: String

@@ -16,6 +16,8 @@ extension AwakeSettingsView {
                 Spacer()
 
                 Button {
+                    settingsState.appSearchText = ""
+                    settingsState.scanInstalledApps()
                     settingsState.showingAddRuleSheet = true
                 } label: {
                     Label("Add Rule", systemImage: "plus")
@@ -92,8 +94,13 @@ extension AwakeSettingsView {
     var addRuleSheetView: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Add Automation Rule")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Add Application Rule")
+                        .font(.headline)
+                    Text("Awake keeps your Mac awake whenever this application is running.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
                 Spacer()
                 Button {
                     settingsState.showingAddRuleSheet = false
@@ -105,231 +112,116 @@ extension AwakeSettingsView {
                 .buttonStyle(.plain)
             }
 
-            Picker("", selection: $settingsState.addRuleType) {
-                Text("Application").tag(0)
-                Text("Work Process").tag(1)
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: settingsState.addRuleType) { type in
-                if type == 1 {
-                    settingsState.scanRunningProcesses()
-                }
-            }
-
-            if settingsState.addRuleType == 0 {
-                VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Watch an Application")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Awake keeps your Mac awake whenever this application is running.")
-                            .font(.caption)
+            // Search bar
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                TextField("Search installed applications...", text: $settingsState.appSearchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                if !settingsState.appSearchText.isEmpty {
+                    Button {
+                        settingsState.appSearchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
+                            .font(.caption)
                     }
-
-                    Button("Choose Installed App…") {
-                        settingsState.showingAddRuleSheet = false
-                        onAddApp()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-
-                    Spacer().frame(height: 10)
+                    .buttonStyle(.plain)
                 }
-                .padding(.vertical, 8)
+            }
+            .padding(8)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+            )
+
+            // Installed Applications List
+            if settingsState.installedApps.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    ProgressView()
+                    Text("Scanning applications…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 250)
+            } else if settingsState.filteredInstalledApps.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "questionmark.app.dashed")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    Text("No applications matching \"\(settingsState.appSearchText)\"")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 250)
             } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Watch a Background Process")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Select a popular developer tool or pick from processes currently running on your Mac.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        ForEach(settingsState.filteredInstalledApps) { app in
+                            Button {
+                                model.addAppRule(name: app.name, bundleID: app.bundleID)
+                                settingsState.showingAddRuleSheet = false
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(nsImage: NSWorkspace.shared.icon(forFile: app.path))
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 28, height: 28)
 
-                    // 1. Recommended Worker Presets Grid (Filtered dynamically by installed apps & tools)
-                    if !settingsState.availablePresets.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("RECOMMENDED WORKERS")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(.secondary)
-
-                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
-                                ForEach(settingsState.availablePresets) { preset in
-                                    let isSelected = settingsState.newProcessName == preset.processName
-                                    Button {
-                                        settingsState.newProcessName = preset.processName
-                                        settingsState.newProcessDisplayName = preset.name
-                                    } label: {
-                                        HStack(spacing: 8) {
-                                            Image(systemName: preset.icon)
-                                                .font(.system(size: 12))
-                                                .foregroundColor(isSelected ? .white : .accentColor)
-                                                .frame(width: 16)
-
-                                            VStack(alignment: .leading, spacing: 1) {
-                                                Text(preset.name)
-                                                    .font(.system(size: 11, weight: .semibold))
-                                                    .foregroundColor(isSelected ? .white : .primary)
-                                                Text(preset.processName)
-                                                    .font(.system(size: 9, design: .monospaced))
-                                                    .foregroundColor(isSelected ? .white.opacity(0.8) : .secondary)
-                                            }
-                                            Spacer()
-                                        }
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 6)
-                                        .background(
-                                            isSelected ? Color.accentColor : Color.primary.opacity(0.04),
-                                            in: RoundedRectangle(cornerRadius: 6)
-                                        )
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(app.name)
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(.primary)
+                                        Text(app.bundleID)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundColor(.secondary)
                                     }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                    }
-
-                    // 2. Currently Running Processes on this Mac
-                    if !settingsState.runningProcesses.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 8) {
-                                Text("RUNNING ON YOUR MAC (\(settingsState.runningProcesses.count))")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundColor(.secondary)
-
-                                Spacer()
-
-                                HStack(spacing: 4) {
-                                    Image(systemName: "magnifyingglass")
-                                        .font(.system(size: 9))
-                                        .foregroundColor(.secondary)
-                                    TextField("Search process…", text: $settingsState.processSearchText)
-                                        .textFieldStyle(.plain)
-                                        .font(.system(size: 10))
-                                        .frame(width: 120)
-                                    if !settingsState.processSearchText.isEmpty {
-                                        Button {
-                                            settingsState.processSearchText = ""
-                                        } label: {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .font(.system(size: 9))
-                                                .foregroundColor(.secondary)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 5))
-
-                                Button("Rescan") {
-                                    settingsState.scanRunningProcesses()
-                                }
-                                .font(.system(size: 10))
-                                .buttonStyle(.plain)
-                                .foregroundColor(.secondary)
-                            }
-
-                            let filtered = settingsState.filteredRunningProcesses
-                            if filtered.isEmpty {
-                                HStack {
                                     Spacer()
-                                    Text("No running processes match \"\(settingsState.processSearchText)\"")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Spacer()
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.system(size: 16))
+                                        .foregroundColor(.accentColor)
                                 }
-                                .padding(.vertical, 14)
-                                .background(Color.primary.opacity(0.02), in: RoundedRectangle(cornerRadius: 6))
-                            } else {
-                                ScrollView(.vertical) {
-                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 125), spacing: 5)], spacing: 5) {
-                                        ForEach(filtered, id: \.self) { proc in
-                                            let isSelected = settingsState.newProcessName == proc
-                                            Button {
-                                                settingsState.newProcessName = proc
-                                                if settingsState.newProcessDisplayName.isEmpty {
-                                                    settingsState.newProcessDisplayName = proc
-                                                }
-                                            } label: {
-                                                HStack(spacing: 4) {
-                                                    Circle()
-                                                        .fill(isSelected ? Color.accentColor : Color.green)
-                                                        .frame(width: 5, height: 5)
-                                                    Text(proc)
-                                                        .font(.system(size: 10, design: .monospaced))
-                                                        .foregroundColor(isSelected ? .primary : .secondary)
-                                                        .lineLimit(1)
-                                                        .truncationMode(.middle)
-                                                    Spacer(minLength: 0)
-                                                }
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 4)
-                                                .background(
-                                                    isSelected ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.04),
-                                                    in: RoundedRectangle(cornerRadius: 5)
-                                                )
-                                                .overlay(
-                                                    RoundedRectangle(cornerRadius: 5)
-                                                        .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1)
-                                                )
-                                            }
-                                            .buttonStyle(.plain)
-                                            .help("Select \(proc)")
-                                        }
-                                    }
-                                    .padding(4)
-                                }
-                                .frame(height: 82)
-                                .background(Color.primary.opacity(0.02), in: RoundedRectangle(cornerRadius: 6))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
                             }
+                            .buttonStyle(.plain)
                         }
                     }
-
-                    // 3. Selected Configuration
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("CONFIGURATION")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.secondary)
-
-                        HStack(spacing: 8) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Executable Name").font(.caption2).foregroundColor(.secondary)
-                                TextField("e.g. Code Helper, node", text: $settingsState.newProcessName)
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.system(size: 11, design: .monospaced))
-                            }
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Display Label").font(.caption2).foregroundColor(.secondary)
-                                TextField("e.g. VS Code Agent", text: $settingsState.newProcessDisplayName)
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.system(size: 11))
-                            }
-                        }
-                    }
-
-                    HStack {
-                        Spacer()
-                        Button("Cancel") { settingsState.showingAddRuleSheet = false }
-                        Button("Add Process Rule") {
-                            let displayName = settingsState.newProcessDisplayName.trimmingCharacters(in: .whitespaces)
-                            let proc = settingsState.newProcessName.trimmingCharacters(in: .whitespaces)
-                            guard !proc.isEmpty else { return }
-                            let name = displayName.isEmpty ? proc : displayName
-                            model.addProcessRule(name: name, processName: proc)
-                            settingsState.newProcessName = ""
-                            settingsState.newProcessDisplayName = ""
-                            settingsState.showingAddRuleSheet = false
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(settingsState.newProcessName.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
+                    .padding(.vertical, 4)
                 }
+                .frame(height: 250)
+            }
+
+            Divider()
+
+            HStack {
+                Button("Choose from Finder…") {
+                    settingsState.showingAddRuleSheet = false
+                    onAddApp()
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+
+                Spacer()
+
+                Button("Cancel") {
+                    settingsState.showingAddRuleSheet = false
+                }
+                .keyboardShortcut(.cancelAction)
             }
         }
         .padding(20)
-        .frame(width: 470)
+        .frame(width: 480, height: 420)
     }
 
     func isSettingsAppOpen(for rule: AwakeStatus.Rule) -> Bool {

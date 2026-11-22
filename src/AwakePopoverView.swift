@@ -5,7 +5,6 @@ struct AwakePopoverView: View {
     @ObservedObject var model: AwakePopoverModel
     let onOpenSettings: () -> Void
     let onAddApp: () -> Void
-    let onAddProcess: () -> Void
     let onDismiss: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -379,10 +378,9 @@ struct AwakePopoverView: View {
                 Spacer()
 
                 Menu {
-                    Button("Watch an App is open…", action: onAddApp)
-                    Button("Watch a Work process runs…", action: onAddProcess)
+                    Button("Add Application Rule…", action: onAddApp)
                     Divider()
-                    Button("Manage all rules in Settings…", action: onOpenSettings)
+                    Button("Manage rules in Settings…", action: onOpenSettings)
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 12, weight: .semibold))

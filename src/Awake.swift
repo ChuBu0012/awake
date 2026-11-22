@@ -165,11 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                 },
                 onAddApp: { [weak self] in
                     self?.popover.performClose(nil)
-                    self?.showSettingsWindow(tab: .automations, openAddRuleType: 0)
-                },
-                onAddProcess: { [weak self] in
-                    self?.popover.performClose(nil)
-                    self?.showSettingsWindow(tab: .automations, openAddRuleType: 1)
+                    self?.showSettingsWindow(tab: .automations, openAddRule: true)
                 },
                 onDismiss: { [weak self] in self?.popover.performClose(nil) }
             )
@@ -256,14 +252,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     }
 
     // MARK: - Windows Management
-    func showSettingsWindow(tab: AwakeSettingsModel.SettingsTab = .general, openAddRuleType: Int? = nil) {
+    func showSettingsWindow(tab: AwakeSettingsModel.SettingsTab = .general, openAddRule: Bool = false) {
         settingsState.selectedTab = tab
-        if let type = openAddRuleType {
-            settingsState.addRuleType = type
+        if openAddRule {
+            settingsState.appSearchText = ""
+            settingsState.scanInstalledApps()
             settingsState.showingAddRuleSheet = true
-            if type == 1 {
-                settingsState.scanRunningProcesses()
-            }
         }
 
         if let window = settingsWindow {
