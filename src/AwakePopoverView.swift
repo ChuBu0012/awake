@@ -247,16 +247,59 @@ struct AwakePopoverView: View {
 
                 Text("⌘T")
                     .font(.caption.weight(.medium))
-                    .opacity(0.6)
+                    .opacity(isManualOn ? 0.6 : 0.8)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
-        .tint(isManualOn ? .secondary : .accentColor)
+        .buttonStyle(MainActionButtonStyle(isManualOn: isManualOn))
         .disabled(model.isBusy)
         .accessibilityHint(isManualOn ? "Turns off sleep prevention" : "Prevents this Mac from sleeping")
+    }
+
+    private struct MainActionButtonStyle: ButtonStyle {
+        let isManualOn: Bool
+        @Environment(\.colorScheme) private var colorScheme
+
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .foregroundColor(foregroundColor)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+                .background(
+                    backgroundColor(isPressed: configuration.isPressed),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(borderColor, lineWidth: 1)
+                )
+                .opacity(configuration.isPressed ? 0.85 : 1.0)
+        }
+
+        private var foregroundColor: Color {
+            if !isManualOn {
+                return .white
+            }
+            return colorScheme == .dark ? .black : .primary
+        }
+
+        private func backgroundColor(isPressed: Bool) -> Color {
+            if !isManualOn {
+                return isPressed ? Color.accentColor.opacity(0.8) : Color.accentColor
+            }
+            if colorScheme == .dark {
+                return isPressed ? Color(white: 0.85) : Color.white
+            } else {
+                return isPressed ? Color(white: 0.94) : Color.white
+            }
+        }
+
+        private var borderColor: Color {
+            if !isManualOn {
+                return .clear
+            }
+            return colorScheme == .dark ? .clear : Color.primary.opacity(0.15)
+        }
     }
 
     // MARK: - Duration Selector
