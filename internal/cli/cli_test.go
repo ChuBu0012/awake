@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -355,11 +356,12 @@ func TestHoldAndReleaseLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	coordinator := engine.New(stateStore, adapter, func() time.Time { return now })
+	currentTime := now
+	coordinator := engine.New(stateStore, adapter, func() time.Time { return currentTime })
 	runner := &fakeCommandRunner{exitCode: 0}
 	outBuf := &bytes.Buffer{}
 	app := New(coordinator, adapter, runner, outBuf, &bytes.Buffer{})
-	app.now = func() time.Time { return now }
+	app.now = func() time.Time { return currentTime }
 
 	// Test 1: awake hold claude-session --ttl 15m
 	if err := app.Run(context.Background(), []string{"hold", "claude-session", "--ttl", "15m"}); err != nil {
@@ -386,5 +388,91 @@ func TestHoldAndReleaseLease(t *testing.T) {
 	}
 	if len(stateAfterRelease.Leases) != 0 {
 		t.Fatalf("expected 0 leases after release, got %#v", stateAfterRelease.Leases)
+	}
+
+	// Test 3: TTL expiry without explicit release
+	if err := app.Run(context.Background(), []string{"hold", "expiring-task", "--ttl", "10m"}); err != nil {
+		t.Fatalf("awake hold failed: %v", err)
+	}
+	// Fast forward time past 10m TTL
+	currentTime = now.Add(11 * time.Minute)
+	if err := app.Run(context.Background(), []string{"status"}); err != nil {
+		t.Fatalf("awake status failed: %v", err)
+	}
+	stateAfterExpiry, err := stateStore.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stateAfterExpiry.Leases) != 0 {
+		t.Fatalf("expected lease to be pruned after TTL expired, got: %#v", stateAfterExpiry.Leases)
+	}
+}
+
+func TestHoldAndReleaseValidation(t *testing.T) {
+	now := time.Date(2026, time.November, 21, 10, 0, 0, 0, time.UTC)
+	adapter := &fakeAdapter{running: make(map[string]domain.ProcessID), now: now}
+	stateStore, err := store.Open(filepath.Join(t.TempDir(), "awake"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := engine.New(stateStore, adapter, func() time.Time { return now })
+	runner := &fakeCommandRunner{exitCode: 0}
+	app := New(coordinator, adapter, runner, &bytes.Buffer{}, &bytes.Buffer{})
+
+	// Empty hold
+	if err := app.Run(context.Background(), []string{"hold"}); err == nil {
+		t.Error("expected error for empty hold args")
+	}
+
+	// Invalid ttl
+	if err := app.Run(context.Background(), []string{"hold", "task", "--ttl"}); err == nil {
+		t.Error("expected error for hold missing ttl value")
+	}
+	if err := app.Run(context.Background(), []string{"hold", "task", "--ttl", "0"}); err == nil {
+		t.Error("expected error for hold zero ttl")
+	}
+
+	// Empty release
+	if err := app.Run(context.Background(), []string{"release"}); err == nil {
+		t.Error("expected error for empty release args")
+	}
+}
+
+func TestStatusClamshellTimedOut(t *testing.T) {
+	evaluation := domain.Evaluation{
+		Effective:         false,
+		ClamshellTimedOut: true,
+		Requests:          []domain.Lease{{ID: "manual", Source: domain.SourceManual, Reason: "Manual On"}},
+	}
+	status := statusFrom(domain.State{BatteryGuardEnabled: true}, evaluation)
+	if !status.ClamshellTimedOut {
+		t.Errorf("expected ClamshellTimedOut to be true")
+	}
+
+	var buf bytes.Buffer
+	app := New(nil, nil, nil, &buf, &bytes.Buffer{})
+	app.printStatus(status)
+	if !strings.Contains(buf.String(), "Backpack Clamshell 2-hour timeout") {
+		t.Errorf("expected printStatus to mention Backpack Clamshell timeout, got: %s", buf.String())
+	}
+}
+
+func TestVerifyCommand(t *testing.T) {
+	now := time.Date(2026, time.November, 21, 10, 0, 0, 0, time.UTC)
+	adapter := &fakeAdapter{running: make(map[string]domain.ProcessID), now: now}
+	stateStore, err := store.Open(filepath.Join(t.TempDir(), "awake"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := engine.New(stateStore, adapter, func() time.Time { return now })
+	var outBuf bytes.Buffer
+	app := New(coordinator, adapter, &fakeCommandRunner{}, &outBuf, &bytes.Buffer{})
+
+	if err := app.Run(context.Background(), []string{"verify"}); err != nil {
+		t.Fatalf("awake verify failed: %v", err)
+	}
+	output := outBuf.String()
+	if !strings.Contains(output, "Awake System Sleep Verification:") {
+		t.Errorf("verify output missing header: %s", output)
 	}
 }

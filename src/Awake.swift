@@ -2,7 +2,6 @@ import AppKit
 import Combine
 import Foundation
 import SwiftUI
-import UniformTypeIdentifiers
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem!
@@ -48,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         // 1. App Menu
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Toggle Awake", action: #selector(toggleAwakeFromMenu), keyEquivalent: "t")
+        appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "About Awake", action: #selector(openAbout), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",")
@@ -81,12 +82,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         NSApplication.shared.mainMenu = mainMenu
     }
 
+    @objc private func toggleAwakeFromMenu() {
+        model.toggleAwake()
+    }
+
     @objc private func openPreferences() {
-        showSettingsWindow()
+        showSettingsWindow(tab: .general)
     }
 
     @objc private func openAbout() {
-        showSettingsWindow()
+        showSettingsWindow(tab: .about)
     }
 
     @objc private func quitApp() {

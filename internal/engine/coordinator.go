@@ -266,7 +266,8 @@ func (c *Coordinator) Tick(ctx context.Context, observed ...domain.Observation) 
 			evaluationState.ActivityLastSeen = state.ActivityLastSeen
 		}
 		result = domain.Evaluate(evaluationState, input)
-		if result.Effective && !power.OnAC && power.BatteryKnown && input.LidClosed {
+		activeOnBatteryLidClosed := len(result.Requests) > 0 && !power.OnAC && power.BatteryKnown && input.LidClosed
+		if activeOnBatteryLidClosed {
 			if state.ClamshellBatteryActiveSince.IsZero() {
 				state.ClamshellBatteryActiveSince = now
 			}

@@ -260,6 +260,74 @@ func TestLidRecoveryPreservesExternalReturnToOriginalValue(t *testing.T) {
 	}
 }
 
+func TestClamshellOnBatteryTimeoutPreservedAcrossTicks(t *testing.T) {
+	startTime := time.Date(2026, time.November, 21, 10, 0, 0, 0, time.UTC)
+	currentTime := startTime
+	adapter := newFakeAdapter(startTime)
+	adapter.power = domain.PowerState{OnAC: false, BatteryPercent: 80, BatteryKnown: true}
+	adapter.observation.LidClosed = true
+	stateStore, err := store.Open(filepath.Join(t.TempDir(), "awake"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := New(stateStore, adapter, func() time.Time { return currentTime })
+	if err := coordinator.AddLease(context.Background(), domain.Lease{ID: "run-task", Source: domain.SourceCommand}); err != nil {
+		t.Fatal(err)
+	}
+
+	// First tick at t=0: should be effective, ClamshellBatteryActiveSince should be set
+	res1, err := coordinator.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res1.Effective || res1.ClamshellTimedOut {
+		t.Fatalf("first tick: expected effective, got %#v", res1)
+	}
+
+	// Advance time past 2 hours
+	currentTime = startTime.Add(2*time.Hour + time.Minute)
+
+	// Tick at 2h+1m: should time out
+	res2, err := coordinator.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Effective || !res2.ClamshellTimedOut {
+		t.Fatalf("tick at 2h1m: expected timed out, got %#v", res2)
+	}
+
+	// Next tick at 2h+2m: should STILL time out!
+	currentTime = startTime.Add(2*time.Hour + 2*time.Minute)
+	res3, err := coordinator.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res3.Effective || !res3.ClamshellTimedOut {
+		t.Fatalf("tick at 2h2m: expected still timed out, got %#v", res3)
+	}
+
+	// Plug in AC power: should resume immediately
+	adapter.power.OnAC = true
+	res4, err := coordinator.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res4.Effective || res4.ClamshellTimedOut {
+		t.Fatalf("plugging in AC: expected active and not timed out, got %#v", res4)
+	}
+
+	// Unplug AC and open lid: should remain active on battery when lid is open
+	adapter.power.OnAC = false
+	adapter.observation.LidClosed = false
+	res5, err := coordinator.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res5.Effective || res5.ClamshellTimedOut {
+		t.Fatalf("opening lid on battery: expected active and not timed out, got %#v", res5)
+	}
+}
+
 type fakeAdapter struct {
 	now           time.Time
 	power         domain.PowerState

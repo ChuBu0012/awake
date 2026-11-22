@@ -41,6 +41,7 @@ struct AwakeStatus: Decodable, Equatable {
 
     let active: Bool
     let batterySuppressed: Bool
+    let clamshellTimedOut: Bool?
     let batteryGuardEnabled: Bool
     let lidSupportEnabled: Bool
     let snoozedUntil: Date?
@@ -48,9 +49,32 @@ struct AwakeStatus: Decodable, Equatable {
     let rules: [Rule]
     let recoveryPending: Bool
 
+    init(
+        active: Bool,
+        batterySuppressed: Bool,
+        clamshellTimedOut: Bool? = nil,
+        batteryGuardEnabled: Bool,
+        lidSupportEnabled: Bool,
+        snoozedUntil: Date?,
+        requests: [Lease],
+        rules: [Rule],
+        recoveryPending: Bool
+    ) {
+        self.active = active
+        self.batterySuppressed = batterySuppressed
+        self.clamshellTimedOut = clamshellTimedOut
+        self.batteryGuardEnabled = batteryGuardEnabled
+        self.lidSupportEnabled = lidSupportEnabled
+        self.snoozedUntil = snoozedUntil
+        self.requests = requests
+        self.rules = rules
+        self.recoveryPending = recoveryPending
+    }
+
     enum CodingKeys: String, CodingKey {
         case active, requests, rules
         case batterySuppressed = "battery_suppressed"
+        case clamshellTimedOut = "clamshell_timed_out"
         case batteryGuardEnabled = "battery_guard_enabled"
         case lidSupportEnabled = "lid_support_enabled"
         case snoozedUntil = "snoozed_until"
@@ -73,6 +97,9 @@ struct AwakeStatus: Decodable, Equatable {
     var activeReasonSummary: String {
         if batterySuppressed {
             return "Paused by Battery Guard"
+        }
+        if clamshellTimedOut == true {
+            return "Paused by Backpack Clamshell limit (2h)"
         }
         let reasons = requests.map(\.reason).filter { !$0.isEmpty }
         if !reasons.isEmpty {

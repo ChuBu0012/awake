@@ -130,6 +130,7 @@ struct AwakePopoverView: View {
         if model.isThermalThrottled { return "Paused by Heat" }
         guard let status = model.status else { return "Awake" }
         if status.batterySuppressed { return "Paused by Battery" }
+        if status.clamshellTimedOut == true { return "Paused (Backpack)" }
         if status.active { return "Awake Active" }
         return "Awake Inactive"
     }
@@ -142,6 +143,9 @@ struct AwakePopoverView: View {
         if status.batterySuppressed {
             return "Battery Guard • Below 20% on battery"
         }
+        if status.clamshellTimedOut == true {
+            return "Backpack Clamshell • 2h battery limit reached"
+        }
         if let timeFormatted = model.timeRemainingFormatted, isManualOn {
             return "Manual timer active • \(timeFormatted) remaining"
         }
@@ -149,7 +153,7 @@ struct AwakePopoverView: View {
     }
 
     private var statusBadgeBackground: Color {
-        if model.isThermalThrottled || isBatterySuppressed {
+        if model.isThermalThrottled || isBatterySuppressed || model.status?.clamshellTimedOut == true {
             return Color.orange.opacity(0.18)
         } else if isActive {
             return Color.green.opacity(0.18)
@@ -163,6 +167,8 @@ struct AwakePopoverView: View {
             return "thermometer.sun.fill"
         } else if isBatterySuppressed {
             return "pause.fill"
+        } else if model.status?.clamshellTimedOut == true {
+            return "briefcase.fill"
         } else if isActive {
             return "eye.fill"
         } else {
@@ -171,7 +177,7 @@ struct AwakePopoverView: View {
     }
 
     private var statusIconColor: Color {
-        if model.isThermalThrottled || isBatterySuppressed {
+        if model.isThermalThrottled || isBatterySuppressed || model.status?.clamshellTimedOut == true {
             return .orange
         } else if isActive {
             return .green
@@ -181,7 +187,7 @@ struct AwakePopoverView: View {
     }
 
     private var assertionStatusIndicator: some View {
-        let isPaused = model.isThermalThrottled || isBatterySuppressed
+        let isPaused = model.isThermalThrottled || isBatterySuppressed || model.status?.clamshellTimedOut == true
         let dotColor: Color = isPaused ? .orange : (isActive ? .green : .secondary.opacity(0.4))
         let textColor: Color = isPaused ? .orange : (isActive ? .green : .secondary)
         let labelText: String = isPaused ? "Paused" : (isActive ? "Asserted" : "Idle")
@@ -250,6 +256,7 @@ struct AwakePopoverView: View {
             }
         }
         .buttonStyle(MainActionButtonStyle(isManualOn: isManualOn))
+        .keyboardShortcut("t", modifiers: .command)
         .disabled(model.isBusy)
         .accessibilityHint(isManualOn ? "Turns off sleep prevention" : "Prevents this Mac from sleeping")
     }
@@ -548,12 +555,6 @@ struct AwakePopoverView: View {
             } else {
                 return "App closed"
             }
-        case "schedule":
-            if isActive {
-                return "Schedule active"
-            } else {
-                return "Outside schedule"
-            }
         default:
             return isActive ? "Active" : "Inactive"
         }
@@ -561,7 +562,6 @@ struct AwakePopoverView: View {
 
     private func ruleIcon(_ kind: String) -> String {
         switch kind {
-        case "schedule": return "calendar"
         case "app_open": return "app.badge.checkmark"
         default: return "terminal"
         }
@@ -569,7 +569,6 @@ struct AwakePopoverView: View {
 
     private func ruleKindDescription(_ kind: String) -> String {
         switch kind {
-        case "schedule": return "Schedule"
         case "app_open": return "App is open"
         default: return "Work process"
         }

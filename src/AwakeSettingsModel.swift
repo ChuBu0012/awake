@@ -65,26 +65,15 @@ struct LoginItemManager {
             ].compactMap { $0 }
             let executablePath = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) ?? (Bundle.main.executablePath ?? "/Applications/Awake.app/Contents/MacOS/Awake")
 
-            let plistContent = """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-                <key>Label</key>
-                <string>\(plistLabel)</string>
-                <key>ProgramArguments</key>
-                <array>
-                    <string>\(executablePath)</string>
-                </array>
-                <key>RunAtLoad</key>
-                <true/>
-                <key>ProcessType</key>
-                <string>Interactive</string>
-            </dict>
-            </plist>
-            """
+            let plistDict: [String: Any] = [
+                "Label": plistLabel,
+                "ProgramArguments": [executablePath],
+                "RunAtLoad": true,
+                "ProcessType": "Interactive"
+            ]
             do {
-                try plistContent.write(to: url, atomically: true, encoding: .utf8)
+                let data = try PropertyListSerialization.data(fromPropertyList: plistDict, format: .xml, options: 0)
+                try data.write(to: url, options: .atomic)
             } catch {
                 return .failure(.fileWriteFailed(error.localizedDescription))
             }
@@ -504,7 +493,7 @@ final class AwakeSettingsModel: ObservableObject {
         }
 
         if !wasActive {
-            model.performAction(["on", "3600"]) {
+            model.performAction(["on", "3600s"]) {
                 inspectAssertions()
             }
         } else {

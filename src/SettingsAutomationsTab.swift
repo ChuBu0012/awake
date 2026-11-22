@@ -31,7 +31,7 @@ extension AwakeSettingsView {
                         let statusCol = settingsRuleStatusColor(rule, isActive: isAct, isAppOpen: appOpen)
 
                         HStack(spacing: 12) {
-                            Image(systemName: rule.kind == "schedule" ? "calendar" : rule.kind == "app_open" ? "app.badge.checkmark" : "terminal")
+                            Image(systemName: rule.kind == "app_open" ? "app.badge.checkmark" : "terminal")
                                 .font(.title3)
                                 .foregroundColor(isAct ? Color(red: 0.2, green: 0.78, blue: 0.35) : (rule.enabled ? .accentColor : .secondary))
                                 .frame(width: 24)
@@ -40,7 +40,7 @@ extension AwakeSettingsView {
                                 Text(rule.name)
                                     .font(.body.weight(.medium))
                                 HStack(spacing: 6) {
-                                    Text(rule.kind == "schedule" ? "Weekly Schedule" : rule.kind == "app_open" ? "App is open" : "Work process")
+                                    Text(rule.kind == "app_open" ? "App is open" : "Work process")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                     Circle()
@@ -387,12 +387,6 @@ extension AwakeSettingsView {
                 return "App is open (Active)"
             } else {
                 return "App closed"
-            }
-        case "schedule":
-            if isActive {
-                return "Schedule active"
-            } else {
-                return "Outside schedule"
             }
         default:
             return isActive ? "Active" : "Inactive"

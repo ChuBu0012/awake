@@ -52,6 +52,7 @@ func (e ExitError) Error() string { return fmt.Sprintf("command exited with stat
 type Status struct {
 	Active            bool           `json:"active"`
 	BatterySuppressed bool           `json:"battery_suppressed"`
+	ClamshellTimedOut bool           `json:"clamshell_timed_out,omitempty"`
 	BatteryGuard      bool           `json:"battery_guard_enabled"`
 	LidSupport        bool           `json:"lid_support_enabled"`
 	SnoozedUntil      *time.Time     `json:"snoozed_until,omitempty"`
@@ -350,7 +351,7 @@ func executableFile(path string) bool {
 
 func (c *CLI) rule(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: awake rule app|process|schedule|enable|disable|remove ...")
+		return fmt.Errorf("usage: awake rule app|process|enable|disable|remove ...")
 	}
 	switch args[0] {
 	case "app":
@@ -429,6 +430,7 @@ func statusFrom(state domain.State, evaluation domain.Evaluation) Status {
 	return Status{
 		Active:            evaluation.Effective,
 		BatterySuppressed: evaluation.BatterySuppressed,
+		ClamshellTimedOut: evaluation.ClamshellTimedOut,
 		BatteryGuard:      state.BatteryGuardEnabled,
 		LidSupport:        state.LidSupportEnabled,
 		SnoozedUntil:      snoozedUntil,
@@ -472,6 +474,10 @@ func (c *CLI) printEvaluation(evaluation domain.Evaluation) {
 		fmt.Fprintln(c.stdout, "Awake request saved; Battery Guard is suppressing sleep prevention until charging resumes or battery rises above 20%.")
 		return
 	}
+	if evaluation.ClamshellTimedOut {
+		fmt.Fprintln(c.stdout, "Awake request saved; Backpack protection has paused sleep prevention after 2 hours with lid closed on battery.")
+		return
+	}
 	if evaluation.Effective {
 		fmt.Fprintln(c.stdout, "Awake is active.")
 	} else {
@@ -482,6 +488,8 @@ func (c *CLI) printEvaluation(evaluation domain.Evaluation) {
 func (c *CLI) printStatus(status Status) {
 	if status.BatterySuppressed {
 		fmt.Fprintln(c.stdout, "Status: Suppressed by Battery Guard")
+	} else if status.ClamshellTimedOut {
+		fmt.Fprintln(c.stdout, "Status: Paused by Backpack Clamshell 2-hour timeout (on battery)")
 	} else if status.Active {
 		fmt.Fprintln(c.stdout, "Status: Active")
 	} else {
@@ -508,9 +516,12 @@ func (c *CLI) help() {
 	fmt.Fprintln(c.stdout, "  awake off")
 	fmt.Fprintln(c.stdout, "  awake status [--json]")
 	fmt.Fprintln(c.stdout, "  awake run <command> [args...]")
+	fmt.Fprintln(c.stdout, "  awake hold <id> [--ttl <duration>]")
+	fmt.Fprintln(c.stdout, "  awake release <id>")
 	fmt.Fprintln(c.stdout, "  awake tick [--automation-owner-pid PID] [--bundle-id ID ...]")
-	fmt.Fprintln(c.stdout, "  awake rule app|process|schedule ...")
+	fmt.Fprintln(c.stdout, "  awake rule app|process|enable|disable|remove ...")
 	fmt.Fprintln(c.stdout, "  awake set battery-guard|lid-support on|off")
+	fmt.Fprintln(c.stdout, "  awake verify")
 	fmt.Fprintln(c.stdout, "  awake setup")
 	fmt.Fprintln(c.stdout, "  awake recover")
 }
@@ -587,11 +598,17 @@ func (c *CLI) hold(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: awake hold <id> [--ttl <duration>]")
 	}
-	id := args[0]
+	id := strings.TrimSpace(args[0])
+	if id == "" || strings.ContainsAny(id, "\x00\n\r\t") {
+		return fmt.Errorf("invalid hold id %q", args[0])
+	}
 	ttl := 30 * time.Minute
-	if len(args) >= 3 && args[1] == "--ttl" {
-		parsed, err := time.ParseDuration(args[2])
-		if err != nil {
+	if len(args) > 1 {
+		if len(args) != 3 || args[1] != "--ttl" {
+			return fmt.Errorf("usage: awake hold <id> [--ttl <duration>]")
+		}
+		parsed, err := ParseDuration(args[2])
+		if err != nil || parsed <= 0 {
 			return fmt.Errorf("invalid ttl duration: %w", err)
 		}
 		ttl = parsed
@@ -621,7 +638,10 @@ func (c *CLI) release(ctx context.Context, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: awake release <id>")
 	}
-	id := args[0]
+	id := strings.TrimSpace(args[0])
+	if id == "" || strings.ContainsAny(id, "\x00\n\r\t") {
+		return fmt.Errorf("invalid release id %q", args[0])
+	}
 	targetID := id
 	if !strings.HasPrefix(targetID, "hold:") {
 		targetID = "hold:" + id

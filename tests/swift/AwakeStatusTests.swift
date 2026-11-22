@@ -77,6 +77,20 @@ struct AwakeStatusTests {
         )
         expect(suppressedStatus.activeReasonSummary == "Paused by Battery Guard", "battery suppressed status must be reported")
 
+        let clamshellTimedOutStatus = AwakeStatus(
+            active: false,
+            batterySuppressed: false,
+            clamshellTimedOut: true,
+            batteryGuardEnabled: true,
+            lidSupportEnabled: true,
+            snoozedUntil: nil,
+            requests: [AwakeStatus.Lease(id: "manual", source: "manual", reason: "Manual On", expiresAt: nil)],
+            rules: [],
+            recoveryPending: false
+        )
+        expect(clamshellTimedOutStatus.activeReasonSummary == "Paused by Backpack Clamshell limit (2h)", "backpack clamshell timeout must be reported")
+        expect(clamshellTimedOutStatus.clamshellTimedOut == true, "clamshellTimedOut must be preserved")
+
         print("AwakeStatusTests: all checks passed")
     }
 

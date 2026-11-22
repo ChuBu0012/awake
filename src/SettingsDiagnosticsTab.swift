@@ -49,22 +49,23 @@ extension AwakeSettingsView {
                 .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
 
                 // Card 2: Clamshell / Lid-Closed (pmset)
-                let isLidActive = model.status?.lidSupportEnabled == true
+                let isLidActive = model.status?.lidSupportEnabled == true && isAwakeActive
+                let isLidEnabled = model.status?.lidSupportEnabled == true
                 let isSudoersReady = settingsState.sudoersConfigured
                 HStack(spacing: 12) {
                     ZStack {
                         Circle()
-                            .fill(isLidActive ? Color.green.opacity(0.15) : (isSudoersReady ? Color.blue.opacity(0.15) : Color.secondary.opacity(0.1)))
+                            .fill(isLidActive ? Color.green.opacity(0.15) : (isLidEnabled ? Color.blue.opacity(0.15) : Color.secondary.opacity(0.1)))
                             .frame(width: 36, height: 36)
                         Image(systemName: "laptopcomputer")
                             .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(isLidActive ? .green : (isSudoersReady ? .blue : .secondary))
+                            .foregroundColor(isLidActive ? .green : (isLidEnabled ? .blue : .secondary))
                     }
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Lid-Closed Lock")
                             .font(.body.weight(.medium))
-                        Text(isLidActive ? "Active — Mac stays awake with lid closed" : (isSudoersReady ? "Ready to use" : "Setup needed in General tab"))
+                        Text(isLidActive ? "Active — Mac stays awake with lid closed" : (isLidEnabled ? "Enabled — Ready when Awake is active" : (isSudoersReady ? "Ready to use" : "Setup needed in General tab")))
                             .font(.caption)
                             .foregroundColor(isLidActive ? .green : .secondary)
                     }
